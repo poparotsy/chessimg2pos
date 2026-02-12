@@ -23,8 +23,8 @@ success = 0
 failed = 0
 files = "abcdefgh"
 
-for img_id, fen_full in list(fens.items())[:10000]:  # Limit to 10k for speed
-    if success % 100 == 0:
+for img_id, fen_full in fens.items():  # Process all images
+    if success % 1000 == 0:
         print(f"Processed {success}...")
     
     img_path = os.path.join(train_dir, f"CV_{img_id.zfill(7)}.jpg")
