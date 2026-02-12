@@ -58,6 +58,31 @@ git clone https://github.com/mdicio/chessimg2pos
 pip install -r requirements.txt
 ```
 
+---
+
+## 🔄 Training with Custom Dataset
+
+If you have a dataset of chess images with FEN labels:
+
+```bash
+# 1. Generate tiles from your dataset
+python3 generate_tiles_from_dataset.py
+
+# 2. Train the model (20-40 minutes)
+python3 train_from_dataset.py
+
+# 3. Test predictions
+python3 -c "from recognizer import predict_fen; print(predict_fen('test_image.png'))"
+```
+
+### Training Scripts
+
+- **`train_from_dataset.py`** - Train on 3D chess dataset (recommended for real-world images)
+- `train_with_existing_tiles.py` - Train on pre-generated tiles
+- `train_ultra_*.py` - Various ultra model training configurations
+
+---
+
 ## 🙏 Acknowledgements
 
 This project is a continuation and modernization of:

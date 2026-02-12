@@ -11,6 +11,12 @@ __pycache__
 *.zip
 model.tf
 
+# Training data and generated files
+data/
+images/tiles*/
+images/chessboards/generated*/
+chessimg2pos/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
