@@ -11,19 +11,30 @@ base_dir = os.path.dirname(os.path.abspath(__file__))
 train_dir = os.path.join(base_dir, "data", "train")
 fen_file = os.path.join(base_dir, "data", "labels", "train_fen.json")
 tiles_dir = os.path.join(base_dir, "images", "tiles_dataset")
+progress_file = os.path.join(base_dir, "tile_progress.txt")
 
 os.makedirs(tiles_dir, exist_ok=True)
 
 with open(fen_file) as f:
     fens = json.load(f)
 
+# Resume from last checkpoint
+processed_ids = set()
+if os.path.exists(progress_file):
+    with open(progress_file) as f:
+        processed_ids = set(line.strip() for line in f)
+    print(f"📂 Resuming: {len(processed_ids)} already processed")
+
 print(f"📊 Processing {len(fens)} images...")
 
-success = 0
+success = len(processed_ids)
 failed = 0
 files = "abcdefgh"
 
-for img_id, fen_full in fens.items():  # Process all images
+for img_id, fen_full in fens.items():
+    if img_id in processed_ids:
+        continue
+    
     if success % 1000 == 0:
         print(f"Processed {success}...")
     
@@ -60,11 +71,20 @@ for img_id, fen_full in fens.items():  # Process all images
                     tile_idx += 1
                     col_idx += 1
         
+        # Save progress
+        with open(progress_file, 'a') as f:
+            f.write(f"{img_id}\n")
+        
         success += 1
     except Exception as e:
         failed += 1
         if failed < 5:
             print(f"  ⚠️  {img_id}: {e}")
+
+print(f"\n✅ Success: {success}")
+print(f"❌ Failed: {failed}")
+print(f"📁 Tiles: {tiles_dir}")
+
 
 print(f"\n✅ Success: {success}")
 print(f"❌ Failed: {failed}")
