@@ -93,9 +93,7 @@ if os.path.exists(checkpoint_path):
 else:
     print(f"✅ Starting fresh training on {device}")
 
-print(f"
-🚀 Training with Board-Level Split for {epochs} epochs...
-")
+print(f"\n🚀 Training with Board-Level Split for {epochs} epochs...\n")
 
 for epoch in range(start_epoch, epochs):
     model.train()
