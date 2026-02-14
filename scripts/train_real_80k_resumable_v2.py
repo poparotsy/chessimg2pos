@@ -62,10 +62,10 @@ print(f"🗂️  Total tiles -> Train: {len(train_paths)}, Val: {len(test_paths)
 print("🔄 Creating datasets...")
 train_dataset = ChessTileDataset(train_paths, fen_chars, use_grayscale, create_image_transforms(use_grayscale))
 test_dataset = ChessTileDataset(test_paths, fen_chars, use_grayscale, create_image_transforms(use_grayscale))
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, 
-                         num_workers=2, pin_memory=True, persistent_workers=True, prefetch_factor=2)
-test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, 
-                        num_workers=2, pin_memory=True, persistent_workers=True, prefetch_factor=2)
+train_loader = DataLoader(train_dataset, batch_size=256, shuffle=True, 
+                         num_workers=0, pin_memory=True)
+test_loader = DataLoader(test_dataset, batch_size=256, shuffle=False, 
+                        num_workers=0, pin_memory=True)
 print("✅ Datasets ready")
 
 # Create model
