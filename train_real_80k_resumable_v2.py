@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Train from scratch on real chess board tiles (80k+ images) with checkpoint resumption
+Train on real chess board tiles with BOARD-LEVEL splitting and checkpoint resumption.
 """
 import os
 import glob
@@ -8,12 +8,16 @@ import torch
 import torch.nn as nn
 import numpy as np
 from torch.utils.data import DataLoader
+import sys
+
+# Add src to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 from chessimg2pos.chessclassifier import UltraEnhancedChessPieceClassifier
 from chessimg2pos.chessdataset import ChessTileDataset, create_image_transforms
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
-output_model = os.path.join(base_dir, "models", "model_real_80k.pt")
-checkpoint_path = os.path.join(base_dir, "models", "checkpoint_real_80k.pt")
+output_model = os.path.join(base_dir, "models", "model_real_80k_v2.pt")
+checkpoint_path = os.path.join(base_dir, "models", "checkpoint_real_80k_v2.pt")
 tiles_dir = os.path.join(base_dir, "images", "tiles_real")
 
 # Config
@@ -24,26 +28,42 @@ batch_size = 128
 learning_rate = 0.001
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Load real data
-print(f"📂 Loading tiles from: {tiles_dir}")
-all_paths = np.array(glob.glob(f"{tiles_dir}/*/*.png"))
-print(f"📊 Found {len(all_paths)} tiles from 80k+ real boards")
+# Load real data by BOARD (directory)
+print(f"📂 Scanning boards in: {tiles_dir}")
+board_dirs = sorted([d for d in glob.glob(f"{tiles_dir}/*") if os.path.isdir(d)])
+print(f"📊 Found {len(board_dirs)} unique boards")
 
-if len(all_paths) == 0:
-    print("❌ No tiles found. Run: python3 prepare_all_datasets.py")
+if len(board_dirs) == 0:
+    print("❌ No board directories found. Run: python3 prepare_all_datasets.py")
     exit(1)
 
-np.random.seed(42)  # Fixed seed for reproducible splits
-np.random.shuffle(all_paths)
-split = int(len(all_paths) * 0.8)
-train_paths, test_paths = all_paths[:split], all_paths[split:]
-print(f"📈 Train: {len(train_paths)}, Test: {len(test_paths)}")
+# CRITICAL: Fixed seed for reproducible board-level splitting
+# This ensures that if we resume, the validation boards are the same boards.
+np.random.seed(42)
+np.random.shuffle(board_dirs)
+
+split_idx = int(len(board_dirs) * 0.8)
+train_board_dirs = board_dirs[:split_idx]
+test_board_dirs = board_dirs[split_idx:]
+
+print(f"📈 Splitting: {len(train_board_dirs)} boards for training, {len(test_board_dirs)} for validation")
+
+def get_tiles_from_boards(dirs):
+    paths = []
+    for d in dirs:
+        paths.extend(glob.glob(os.path.join(d, "*.png")))
+    return np.array(paths)
+
+print("🔍 Collecting tile paths...")
+train_paths = get_tiles_from_boards(train_board_dirs)
+test_paths = get_tiles_from_boards(test_board_dirs)
+print(f"🗂️  Total tiles -> Train: {len(train_paths)}, Val: {len(test_paths)}")
 
 print("🔄 Creating datasets...")
 train_dataset = ChessTileDataset(train_paths, fen_chars, use_grayscale, create_image_transforms(use_grayscale))
 test_dataset = ChessTileDataset(test_paths, fen_chars, use_grayscale, create_image_transforms(use_grayscale))
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
-test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
+test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
 print("✅ Datasets ready")
 
 # Create model
@@ -73,10 +93,11 @@ if os.path.exists(checkpoint_path):
 else:
     print(f"✅ Starting fresh training on {device}")
 
-print(f"\n🚀 Training on 80k+ real boards for {epochs} epochs...\n")
+print(f"
+🚀 Training with Board-Level Split for {epochs} epochs...
+")
 
 for epoch in range(start_epoch, epochs):
-    # Train
     model.train()
     train_loss, correct, total = 0.0, 0, 0
     print(f"Epoch {epoch+1}/{epochs} - Training...", end="", flush=True)
@@ -97,7 +118,6 @@ for epoch in range(start_epoch, epochs):
     train_acc = correct / total
     print(f" Train: {train_acc:.4f}", end="", flush=True)
     
-    # Validate
     model.eval()
     val_correct, val_total = 0, 0
     print(" - Validating...", end="", flush=True)
@@ -130,9 +150,7 @@ for epoch in range(start_epoch, epochs):
     else:
         print()
 
-print(f"\n✅ Done! Best accuracy: {best_acc:.2%}")
+print(f"
+✅ Done! Best reliable accuracy: {best_acc:.2%}")
 print(f"💾 Model: {output_model}")
 print(f"🔄 Checkpoint: {checkpoint_path}")
-print()
-print("Test it:")
-print("  python3 test_2d_model.py puzzle.png")
