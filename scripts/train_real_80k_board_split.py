@@ -74,9 +74,7 @@ criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=2)
 
-print(f"
-🚀 Training with Board-Level Split for {epochs} epochs...
-")
+print(f"\n🚀 Training with Board-Level Split for {epochs} epochs...\n")
 
 best_acc = 0.0
 for epoch in range(epochs):
@@ -123,5 +121,4 @@ for epoch in range(epochs):
     else:
         print()
 
-print(f"
-✅ Done! Best reliable accuracy: {best_acc:.2%}")
+print(f"\n✅ Done! Best reliable accuracy: {best_acc:.2%}")

@@ -148,7 +148,6 @@ for epoch in range(start_epoch, epochs):
     else:
         print()
 
-print(f"
-✅ Done! Best reliable accuracy: {best_acc:.2%}")
+print(f"\n✅ Done! Best reliable accuracy: {best_acc:.2%}")
 print(f"💾 Model: {output_model}")
 print(f"🔄 Checkpoint: {checkpoint_path}")
