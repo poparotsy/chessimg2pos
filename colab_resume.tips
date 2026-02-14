@@ -19,3 +19,26 @@ checkpoint_path = '/content/drive/My Drive/colab_checkpoints/checkpoint_real_80k
 
 The checkpoint saves everything needed to resume exactly where you left off, so you won't lose progress when Colab kicks you out.
 
+
+# Check on GPU
+#
+# run in cell
+!pip install gputil
+import GPUtil
+GPUtil.showUtilization()
+
+
+!/usr/bin/nvidia-smi
+
+
+
+import tensorflow as tf
+import torch
+
+print(f"TensorFlow GPU: {tf.test.is_gpu_available()}")
+print(f"PyTorch GPU: {torch.cuda.is_available()}")
+
+if not torch.cuda.is_available():
+    print("\n--- ACTION REQUIRED ---")
+    print("Go to Runtime > Change runtime type > Select T4 GPU > Save")
+
