@@ -96,6 +96,11 @@ model = UltraEnhancedChessPieceClassifier(
     use_grayscale=use_grayscale
 ).to(device)
 
+# Multi-GPU support
+if torch.cuda.device_count() > 1:
+    print(f"🚀 Detected {torch.cuda.device_count()} GPUs. Enabling DataParallel.")
+    model = nn.DataParallel(model)
+
 # Training setup
 criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
@@ -110,7 +115,19 @@ best_acc = 0.0
 if os.path.exists(checkpoint_path):
     print(f"🔄 Loading checkpoint from {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location=device)
-    model.load_state_dict(checkpoint['model_state_dict'])
+    
+    # Handle DataParallel prefix differences
+    state_dict = checkpoint['model_state_dict']
+    is_dp_model = isinstance(model, nn.DataParallel)
+    # Check if the keys have 'module.' prefix
+    has_dp_prefix = any(k.startswith('module.') for k in state_dict.keys())
+    
+    if is_dp_model and not has_dp_prefix:
+        state_dict = {f'module.{k}': v for k, v in state_dict.items()}
+    elif not is_dp_model and has_dp_prefix:
+        state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
+        
+    model.load_state_dict(state_dict)
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
     if scaler and 'scaler_state_dict' in checkpoint:
@@ -168,6 +185,42 @@ for epoch in range(start_epoch, epochs):
             inputs, labels = inputs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
             
             # Using autocast for validation as well
+            if scaler:
+                with autocast('cuda'):
+                    outputs = model(inputs)
+            else:
+                outputs = model(inputs)
+                
+            _, predicted = torch.max(outputs.data, 1)
+            val_total += labels.size(0)
+            val_correct += (predicted == labels).sum().item()
+    
+    val_acc = val_correct / val_total
+    print(f" Val: {val_acc:.4f}", end="")
+    
+    scheduler.step(val_acc)
+    
+    # Save checkpoint - always save underlying model to keep checkpoints clean
+    model_to_save = model.module if isinstance(model, nn.DataParallel) else model
+    
+    checkpoint_data = {
+        'epoch': epoch,
+        'model_state_dict': model_to_save.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
+        'best_acc': max(best_acc, val_acc),
+    }
+    if scaler:
+        checkpoint_data['scaler_state_dict'] = scaler.state_dict()
+        
+    torch.save(checkpoint_data, checkpoint_path)
+    
+    if val_acc > best_acc:
+        best_acc = val_acc
+        torch.save(model_to_save.state_dict(), output_model)
+        print(f" ✅ Saved (best: {best_acc:.4f})")
+    else:
+        print()
             if scaler:
                 with autocast('cuda'):
                     outputs = model(inputs)
