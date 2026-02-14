@@ -1,0 +1,21 @@
+Usage:
+bash
+# Start training
+python3 train_real_80k_resumable.py
+
+# If Colab disconnects, just run again - it will resume from last completed epoch
+python3 train_real_80k_resumable.py
+
+
+For Colab with Google Drive (based on Gemini's tip):
+Add this at the top of your notebook:
+python
+from google.colab import drive
+drive.mount('/content/drive')
+
+# Change checkpoint path to Drive
+checkpoint_path = '/content/drive/My Drive/colab_checkpoints/checkpoint_real_80k.pt'
+
+
+The checkpoint saves everything needed to resume exactly where you left off, so you won't lose progress when Colab kicks you out.
+
