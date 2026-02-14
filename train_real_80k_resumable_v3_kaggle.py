@@ -10,6 +10,8 @@ import torch.nn as nn
 import numpy as np
 from torch.utils.data import DataLoader
 import sys
+import time
+from datetime import datetime, timedelta
 from torch.amp import GradScaler, autocast
 
 # Add src to path for imports
@@ -113,7 +115,7 @@ scaler = GradScaler('cuda') if device.type == 'cuda' else None
 start_epoch = 0
 best_acc = 0.0
 if os.path.exists(checkpoint_path):
-    print(f"🔄 Loading checkpoint from {checkpoint_path}")
+    print(f"🔄 Resuming from checkpoint: {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location=device)
     
     # Handle DataParallel prefix differences
@@ -138,12 +140,20 @@ if os.path.exists(checkpoint_path):
 else:
     print(f"✅ Starting fresh training on {device}")
 
-print(f"\n🚀 Training with Board-Level Split for {epochs} epochs...\n")
+def format_time(seconds):
+    return str(timedelta(seconds=int(seconds)))
 
+print(f"\n🚀 Training with Board-Level Split for {epochs} epochs...")
+print(f"📂 Output Model: {output_model}")
+print(f"🔄 Checkpoint: {checkpoint_path}\n")
+
+total_start_time = time.time()
 for epoch in range(start_epoch, epochs):
+    epoch_start_time = time.time()
+    now = datetime.now().strftime("%H:%M:%S")
     model.train()
     train_loss, correct, total = 0.0, 0, 0
-    print(f"Epoch {epoch+1}/{epochs} - Training...", end="", flush=True)
+    print(f"[{now}] Epoch {epoch+1}/{epochs} - Training...", end="", flush=True)
     
     for batch_idx, (inputs, labels) in enumerate(train_loader):
         # GPU Optimization: non_blocking=True
@@ -196,7 +206,17 @@ for epoch in range(start_epoch, epochs):
             val_correct += (predicted == labels).sum().item()
     
     val_acc = val_correct / val_total
-    print(f" Val: {val_acc:.4f}", end="")
+    
+    # Calculate times
+    epoch_duration = time.time() - epoch_start_time
+    total_elapsed = time.time() - total_start_time
+    epochs_done = (epoch - start_epoch) + 1
+    epochs_left = epochs - (epoch + 1)
+    avg_epoch_time = total_elapsed / epochs_done
+    eta_seconds = avg_epoch_time * epochs_left
+    
+    current_lr = optimizer.param_groups[0]['lr']
+    print(f" Val: {val_acc:.4f} | LR: {current_lr:.6f} | Time: {format_time(epoch_duration)} | ETA: {format_time(eta_seconds)}")
     
     scheduler.step(val_acc)
     
@@ -218,44 +238,13 @@ for epoch in range(start_epoch, epochs):
     if val_acc > best_acc:
         best_acc = val_acc
         torch.save(model_to_save.state_dict(), output_model)
-        print(f" ✅ Saved (best: {best_acc:.4f})")
-    else:
-        print()
-            if scaler:
-                with autocast('cuda'):
-                    outputs = model(inputs)
-            else:
-                outputs = model(inputs)
-                
-            _, predicted = torch.max(outputs.data, 1)
-            val_total += labels.size(0)
-            val_correct += (predicted == labels).sum().item()
+        print(f" ✨ Best model updated! Saved to: {output_model}")
     
-    val_acc = val_correct / val_total
-    print(f" Val: {val_acc:.4f}", end="")
-    
-    scheduler.step(val_acc)
-    
-    # Save checkpoint
-    checkpoint_data = {
-        'epoch': epoch,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'scheduler_state_dict': scheduler.state_dict(),
-        'best_acc': max(best_acc, val_acc),
-    }
-    if scaler:
-        checkpoint_data['scaler_state_dict'] = scaler.state_dict()
-        
-    torch.save(checkpoint_data, checkpoint_path)
-    
-    if val_acc > best_acc:
-        best_acc = val_acc
-        torch.save(model.state_dict(), output_model)
-        print(f" ✅ Saved (best: {best_acc:.4f})")
-    else:
-        print()
+    # Explicitly show where checkpoint is saved every few epochs or if it's taking long
+    if (epoch + 1) % 5 == 0 or epoch == epochs - 1:
+        print(f" 💾 Checkpoint synchronized: {checkpoint_path}")
 
-print(f"\n✅ Done! Best reliable accuracy: {best_acc:.2%}")
-print(f"💾 Model: {output_model}")
-print(f"🔄 Checkpoint: {checkpoint_path}")
+print(f"\n✅ Training Complete!")
+print(f"🏆 Best reliable accuracy: {best_acc:.2%}")
+print(f"🕒 Total time: {format_time(time.time() - total_start_time)}")
+print(f"💾 Final Model: {output_model}")
