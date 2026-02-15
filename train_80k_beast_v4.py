@@ -216,8 +216,14 @@ def main():
             correct += (pred == labels).sum().item()
 
             if i % 10 == 0:
+                elapsed = time.time() - total_start
+                # Simple ETA based on current epoch progress
+                progress = (i + 1) / len(train_loader)
+                batch_time = (time.time() - epoch_start) / (i + 1)
+                eta_epoch = batch_time * (len(train_loader) - (i + 1))
+                
                 mem = get_memory_stats()
-                print(f"\rEpoch {epoch+1} [{i}/{len(train_loader)}] | Loss: {loss.item():.4f} | Data: {data_time:.3f}s | {mem}", end="", flush=True)
+                print(f"\rEpoch {epoch+1} [{i}/{len(train_loader)}] | Loss: {loss.item():.4f} | Data: {data_time:.3f}s | {format_time(elapsed)} < {format_time(eta_epoch)} | {mem}", end="", flush=True)
             
             data_start = time.time()
 
