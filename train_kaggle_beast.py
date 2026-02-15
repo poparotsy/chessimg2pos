@@ -74,7 +74,9 @@ def format_time(seconds):
 
 def get_gpu_mem():
     if torch.cuda.is_available():
-        return f"{torch.cuda.memory_allocated()/1e9:.1f}GB"
+        allocated = torch.cuda.memory_allocated() / 1e9
+        reserved = torch.cuda.memory_reserved() / 1e9
+        return f"{allocated:.1f}/{reserved:.1f}GB"
     return "N/A"
 
 print("="*70)
@@ -126,10 +128,10 @@ val_ds = ChessTileDataset(val_paths, FEN_CHARS, USE_GRAYSCALE,
 
 train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True,
                           num_workers=NUM_WORKERS, pin_memory=True, 
-                          prefetch_factor=2, persistent_workers=True)
+                          prefetch_factor=4, persistent_workers=True)
 val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False,
                         num_workers=NUM_WORKERS, pin_memory=True,
-                        persistent_workers=True)
+                        prefetch_factor=4, persistent_workers=True)
 print(f"✅ DataLoaders ready ({NUM_WORKERS} workers, prefetch=2)\n")
 
 # ============ MODEL ============
