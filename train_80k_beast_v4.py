@@ -29,10 +29,21 @@ EPOCHS = 30
 LEARNING_RATE = 0.001
 FEN_CHARS = "1RNBQKPrnbqkp"
 USE_GRAYSCALE = True
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Smarter Device Detection
+if torch.cuda.is_available():
+    DEVICE = torch.device("cuda")
+elif torch.backends.mps.is_available():
+    DEVICE = torch.device("mps")
+else:
+    DEVICE = torch.device("cpu")
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
+# Check both local (../) and server (./) paths
 tiles_dir = os.path.join(base_dir, "images", "tiles_real")
+if not os.path.exists(tiles_dir):
+    tiles_dir = os.path.join(base_dir, "..", "images", "tiles_real")
+
 output_model = os.path.join(base_dir, "models", "model_80k_beast_v4.pt")
 checkpoint_path = os.path.join(base_dir, "models", "checkpoint_80k_beast_v4.pt")
 
@@ -75,25 +86,53 @@ def format_time(seconds):
     return str(timedelta(seconds=int(seconds)))
 
 def main():
-    print(f"🐉 BEAST V4 - Target: {DEVICE}")
+    print(f"🐉 BEAST V4 - Target: {DEVICE}", flush=True)
+    print(f"📂 Tiles Source: {tiles_dir}", flush=True)
     
-    board_dirs = sorted([d for d in glob.glob(f"{tiles_dir}/*") if os.path.isdir(d)])
-    if not board_dirs:
-        print(f"❌ No data found at {tiles_dir}")
+    if not os.path.exists(tiles_dir):
+        print(f"❌ Directory not found: {tiles_dir}", flush=True)
         return
 
+    print("🔍 Scanning board directories (fast scan)...", flush=True)
+    board_dirs = []
+    # os.scandir is 10x-100x faster than glob for 80k folders
+    with os.scandir(tiles_dir) as it:
+        for entry in it:
+            if entry.is_dir():
+                board_dirs.append(entry.path)
+                if len(board_dirs) % 10000 == 0:
+                    print(f"  ...found {len(board_dirs)} boards", flush=True)
+    
+    board_dirs.sort()
+    if not board_dirs:
+        print(f"❌ No subdirectories found at {tiles_dir}", flush=True)
+        return
+
+    print(f"✅ Found {len(board_dirs)} boards. Splitting data...", flush=True)
     np.random.seed(42)
     np.random.shuffle(board_dirs)
     split = int(len(board_dirs) * 0.8)
     train_dirs, val_dirs = board_dirs[:split], board_dirs[split:]
 
-    def get_paths(dirs):
+    def get_paths(dirs, label):
         p = []
-        for d in dirs: p.extend(glob.glob(os.path.join(d, "*.png")))
+        total = len(dirs)
+        for i, d in enumerate(dirs):
+            if i % 1000 == 0:
+                print(f"\r  [{label}] Tile Scan: {i}/{total} boards...", end="", flush=True)
+            with os.scandir(d) as it:
+                for entry in it:
+                    if entry.is_file() and entry.name.endswith(".png"):
+                        p.append(entry.path)
+        print(f"\n  [{label}] Done. Total tiles: {len(p)}", flush=True)
         return np.array(p)
 
-    train_paths, val_paths = get_paths(train_dirs), get_paths(val_dirs)
-    print(f"📊 Tiles -> Train: {len(train_paths)}, Val: {len(val_paths)}")
+    train_paths = get_paths(train_dirs, "Train")
+    val_paths = get_paths(val_dirs, "Val")
+    
+    if len(train_paths) == 0:
+        print("❌ No images found in directories!", flush=True)
+        return
 
     num_cpus = os.cpu_count() or 4
     train_ds = ChessTileDataset(train_paths, FEN_CHARS, USE_GRAYSCALE, create_image_transforms(USE_GRAYSCALE))
@@ -109,7 +148,7 @@ def main():
     )
 
     model = UltraEnhancedChessPieceClassifier(num_classes=len(FEN_CHARS), use_grayscale=USE_GRAYSCALE).to(DEVICE)
-    if torch.cuda.device_count() > 1:
+    if DEVICE.type == 'cuda' and torch.cuda.device_count() > 1:
         model = nn.DataParallel(model)
 
     criterion_focal = FocalLoss()
@@ -142,7 +181,7 @@ def main():
             inputs, labels = inputs.to(DEVICE, non_blocking=True), labels.to(DEVICE, non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
 
-            with autocast('cuda'):
+            with torch.autocast(device_type=DEVICE.type, enabled=(DEVICE.type != 'cpu')):
                 outputs = model(inputs)
                 loss = 0.7 * criterion_focal(outputs, labels) + 0.3 * criterion_smooth(outputs, labels)
             
@@ -166,7 +205,7 @@ def main():
 
             if i % 100 == 0:
                 mem = get_memory_stats()
-                print(f"\rEpoch {epoch+1} [{i}/{len(train_loader)}] | Loss: {loss.item():.4f} | Data: {data_time:.3f}s | {mem}", end="")
+                print(f"\rEpoch {epoch+1} [{i}/{len(train_loader)}] | Loss: {loss.item():.4f} | Data: {data_time:.3f}s | {mem}", end="", flush=True)
             
             data_start = time.time()
 
@@ -177,7 +216,7 @@ def main():
         with torch.no_grad():
             for inputs, labels in val_loader:
                 inputs, labels = inputs.to(DEVICE, non_blocking=True), labels.to(DEVICE, non_blocking=True)
-                with autocast('cuda'):
+                with torch.autocast(device_type=DEVICE.type, enabled=(DEVICE.type != 'cpu')):
                     outputs = model(inputs)
                 _, pred = torch.max(outputs, 1)
                 val_total += labels.size(0)
@@ -190,7 +229,7 @@ def main():
         completed = epoch - start_epoch + 1
         eta = (EPOCHS - epoch - 1) * (elapsed / completed)
         
-        print(f"\n📊 Epoch {epoch+1} Summary: Train Acc: {train_acc:.4f} | Val Acc: {val_acc:.4f} | Time: {format_time(epoch_time)} | ETA: {format_time(eta)}")
+        print(f"\n📊 Epoch {epoch+1} Summary: Train Acc: {train_acc:.4f} | Val Acc: {val_acc:.4f} | Time: {format_time(epoch_time)} | ETA: {format_time(eta)}", flush=True)
 
         save_data = {
             'epoch': epoch,
@@ -205,9 +244,9 @@ def main():
             best_acc = val_acc
             m = model.module if isinstance(model, nn.DataParallel) else model
             torch.save(m.state_dict(), output_model)
-            print(f"✨ Best model updated! Acc: {best_acc:.4f}")
+            print(f"✨ Best model updated! Acc: {best_acc:.4f}", flush=True)
 
-    print(f"\n✅ BEAST Training Complete! Total Time: {format_time(time.time() - total_start)}")
+    print(f"\n✅ BEAST Training Complete! Total Time: {format_time(time.time() - total_start)}", flush=True)
 
 if __name__ == "__main__":
     main()
