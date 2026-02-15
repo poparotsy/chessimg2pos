@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-BEAST V4 - High-Throughput Training for Kaggle Dual T4 GPUs.
-Optimized with Lazy Board Loading to start instantly.
+BEAST V4 (SAVAGE) - High-Throughput Training for Kaggle Dual T4 GPUs.
+Pre-scans paths for maximum GPU utilization (0.000s Data lag).
 """
 import os
 import sys
@@ -18,7 +18,7 @@ from PIL import Image
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src'))
 from chessimg2pos.chessclassifier import UltraEnhancedChessPieceClassifier
-from chessimg2pos.chessdataset import create_image_transforms
+from chessimg2pos.chessdataset import ChessTileDataset, create_image_transforms
 
 # --- Hardware Optimization ---
 torch.backends.cudnn.benchmark = True
@@ -45,45 +45,6 @@ if not os.path.exists(tiles_dir):
 output_model = os.path.join(base_dir, "models", "model_80k_beast_v4.pt")
 checkpoint_path = os.path.join(base_dir, "models", "checkpoint_80k_beast_v4.pt")
 os.makedirs(os.path.join(base_dir, "models"), exist_ok=True)
-
-class LazyChessBoardDataset(Dataset):
-    def __init__(self, board_dirs, fen_chars, use_grayscale=True, transform=None):
-        self.board_dirs = board_dirs
-        self.fen_chars = fen_chars
-        self.use_grayscale = use_grayscale
-        self.transform = transform
-        self.tiles_per_board = 64
-        # Cache to avoid repeated disk scans
-        self.last_board_idx = -1
-        self.cached_tiles = []
-        
-    def __len__(self):
-        return len(self.board_dirs) * self.tiles_per_board
-
-    def __getitem__(self, idx):
-        board_idx = idx // self.tiles_per_board
-        tile_idx = idx % self.tiles_per_board
-        
-        # Only scan the directory if we've moved to a new board
-        if board_idx != self.last_board_idx:
-            board_path = self.board_dirs[board_idx]
-            self.cached_tiles = sorted([os.path.join(board_path, f) for f in os.listdir(board_path) if f.endswith('.png')])
-            self.last_board_idx = board_idx
-        
-        if not self.cached_tiles:
-            # Fallback if directory is empty
-            return torch.zeros((1 if self.use_grayscale else 3, 32, 32)), 0
-
-        image_path = self.cached_tiles[tile_idx % len(self.cached_tiles)]
-        piece_type = image_path[-5]
-        label = self.fen_chars.index(piece_type)
-        
-        img = Image.open(image_path)
-        img = img.convert('L' if self.use_grayscale else 'RGB')
-        if self.transform:
-            img = self.transform(img)
-            
-        return img, label
 
 class FocalLoss(nn.Module):
     def __init__(self, alpha=1, gamma=2):
@@ -121,8 +82,26 @@ def get_memory_stats():
 def format_time(seconds):
     return str(timedelta(seconds=int(seconds)))
 
+def fast_tile_scan(board_dirs, label):
+    """Ultra-fast path collection using os.scandir"""
+    paths = []
+    total = len(board_dirs)
+    print(f"🔍 [{label}] Collecting tiles from {total} boards...", flush=True)
+    start_t = time.time()
+    for i, d in enumerate(board_dirs):
+        if i % 5000 == 0 and i > 0:
+            elapsed = time.time() - start_t
+            speed = i / elapsed
+            print(f"  ... {i}/{total} boards ({speed:.1f} boards/sec)", flush=True)
+        with os.scandir(d) as it:
+            for entry in it:
+                if entry.is_file() and entry.name.endswith(".png"):
+                    paths.append(entry.path)
+    print(f"✅ [{label}] Done! Found {len(paths)} tiles in {format_time(time.time() - start_t)}", flush=True)
+    return np.array(paths)
+
 def main():
-    print(f"🐉 BEAST V4 (LAZY) - Target: {DEVICE}", flush=True)
+    print(f"🐉 BEAST V4 (SAVAGE) - Target: {DEVICE}", flush=True)
     print(f"📂 Tiles Source: {tiles_dir}", flush=True)
     
     if not os.path.exists(tiles_dir):
@@ -136,31 +115,29 @@ def main():
         print(f"❌ No subdirectories found at {tiles_dir}", flush=True)
         return
 
-    print(f"✅ Found {len(board_dirs)} boards. Total estimated tiles: {len(board_dirs)*64}", flush=True)
     np.random.seed(42)
     np.random.shuffle(board_dirs)
     split = int(len(board_dirs) * 0.8)
     train_dirs, val_dirs = board_dirs[:split], board_dirs[split:]
 
-    num_cpus = os.cpu_count() or 4
-    train_ds = LazyChessBoardDataset(train_dirs, FEN_CHARS, USE_GRAYSCALE, create_image_transforms(USE_GRAYSCALE))
+    # Pre-scan everything into memory for maximum speed
+    train_paths = fast_tile_scan(train_dirs, "Train")
     
-    # Speed Fix: Only validate on 1000 boards (64k tiles) instead of 16k boards
-    # This makes validation take ~30 seconds instead of 20 minutes.
+    # Speed Fix: Only validate on 1000 boards (64k tiles) for speed
     val_subset = val_dirs[:1000]
-    val_ds = LazyChessBoardDataset(val_subset, FEN_CHARS, USE_GRAYSCALE, create_image_transforms(USE_GRAYSCALE))
+    val_paths = fast_tile_scan(val_subset, "Val")
 
-    # Boards are already shuffled above, so we set shuffle=False here
-    # This allows the Lazy cache to work and kills the 14s lag
+    num_cpus = os.cpu_count() or 4
+    train_ds = ChessTileDataset(train_paths, FEN_CHARS, USE_GRAYSCALE, create_image_transforms(USE_GRAYSCALE))
+    val_ds = ChessTileDataset(val_paths, FEN_CHARS, USE_GRAYSCALE, create_image_transforms(USE_GRAYSCALE))
+
     train_loader = DataLoader(
-        train_ds, batch_size=BATCH_SIZE, shuffle=False, 
-        num_workers=num_cpus, pin_memory=True, prefetch_factor=4,
-        persistent_workers=True
+        train_ds, batch_size=BATCH_SIZE, shuffle=True, 
+        num_workers=num_cpus, pin_memory=True, prefetch_factor=2
     )
     val_loader = DataLoader(
         val_ds, batch_size=BATCH_SIZE, shuffle=False, 
-        num_workers=num_cpus, pin_memory=True, prefetch_factor=2,
-        persistent_workers=True
+        num_workers=num_cpus, pin_memory=True
     )
 
     model = UltraEnhancedChessPieceClassifier(num_classes=len(FEN_CHARS), use_grayscale=USE_GRAYSCALE).to(DEVICE)
@@ -221,11 +198,9 @@ def main():
 
             if i % 10 == 0:
                 elapsed = time.time() - total_start
-                # Simple ETA based on current epoch progress
                 progress = (i + 1) / len(train_loader)
                 batch_time = (time.time() - epoch_start) / (i + 1)
                 eta_epoch = batch_time * (len(train_loader) - (i + 1))
-                
                 mem = get_memory_stats()
                 print(f"\rEpoch {epoch+1} [{i}/{len(train_loader)}] | Loss: {loss.item():.4f} | Data: {data_time:.3f}s | {format_time(elapsed)} < {format_time(eta_epoch)} | {mem}", end="", flush=True)
             
@@ -235,12 +210,9 @@ def main():
         
         model.eval()
         val_correct, val_total = 0, 0
-        print("\n🔍 Validating (on 1000 boards)...", flush=True)
+        print("\n🔍 Validating...", flush=True)
         with torch.no_grad():
-            for j, (inputs, labels) in enumerate(val_loader):
-                if j % 10 == 0:
-                    print(f"\r  Progress: [{j}/{len(val_loader)}]", end="", flush=True)
-                
+            for inputs, labels in val_loader:
                 inputs, labels = inputs.to(DEVICE, non_blocking=True), labels.to(DEVICE, non_blocking=True)
                 with torch.autocast(device_type=DEVICE.type, enabled=(DEVICE.type != 'cpu')):
                     outputs = model(inputs)
@@ -248,14 +220,13 @@ def main():
                 val_total += labels.size(0)
                 val_correct += (pred == labels).sum().item()
         
-        print(f"\r  Progress: Done!", flush=True)
         val_acc = val_correct / val_total
         epoch_time = time.time() - epoch_start
         elapsed = time.time() - total_start
         completed = epoch - start_epoch + 1
         eta = (EPOCHS - epoch - 1) * (elapsed / completed)
         
-        print(f"\n📊 Epoch {epoch+1} Summary: Train Acc: {train_acc:.4f} | Val Acc: {val_acc:.4f} | Time: {format_time(epoch_time)} | ETA: {format_time(eta)}", flush=True)
+        print(f"📊 Epoch {epoch+1} Summary: Train Acc: {train_acc:.4f} | Val Acc: {val_acc:.4f} | Time: {format_time(epoch_time)} | ETA: {format_time(eta)}", flush=True)
 
         save_data = {
             'epoch': epoch,
