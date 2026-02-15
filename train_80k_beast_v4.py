@@ -24,7 +24,7 @@ from chessimg2pos.chessdataset import create_image_transforms
 torch.backends.cudnn.benchmark = True
 
 # --- Config ---
-BATCH_SIZE = 2048
+BATCH_SIZE = 4096
 EPOCHS = 30
 LEARNING_RATE = 0.001
 FEN_CHARS = "1RNBQKPrnbqkp"
