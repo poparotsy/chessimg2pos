@@ -27,8 +27,6 @@ if torch.cuda.is_available():
         print(f"\n   GPU {i}: {torch.cuda.get_device_name(i)}")
         print(f"      Total Memory: {props.total_memory / 1e9:.1f}GB")
         print(f"      Multi-Processors: {props.multi_processor_count}")
-        print(f"      Max Threads/Block: {props.max_threads_per_block}")
-        print(f"      Max Threads/MP: {props.max_threads_per_multi_processor}")
     
     total_vram = sum(torch.cuda.get_device_properties(i).total_memory for i in range(gpu_count))
     print(f"\n   Total VRAM: {total_vram / 1e9:.1f}GB")
