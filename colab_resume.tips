@@ -42,3 +42,12 @@ if not torch.cuda.is_available():
     print("\n--- ACTION REQUIRED ---")
     print("Go to Runtime > Change runtime type > Select T4 GPU > Save")
 
+#On Kaggle link to dataset
+#
+import os
+
+source = '/kaggle/input/datasets/jeoyeo/chessboard-tiles/images'
+destination = '/kaggle/working/chessimg2pos/images'
+
+os.symlink(source, destination)
+
