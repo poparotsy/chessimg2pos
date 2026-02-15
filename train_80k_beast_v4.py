@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
 """
 BEAST V4 - High-Throughput Training for Kaggle Dual T4 GPUs.
-Optimized for UltraEnhancedChessPieceClassifier with Focal Loss.
+Optimized with Lazy Board Loading to start instantly.
 """
 import os
 import sys
-import glob
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 import time
 from datetime import datetime, timedelta
 from torch.amp import GradScaler, autocast
+from PIL import Image
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src'))
 from chessimg2pos.chessclassifier import UltraEnhancedChessPieceClassifier
-from chessimg2pos.chessdataset import ChessTileDataset, create_image_transforms
+from chessimg2pos.chessdataset import create_image_transforms
 
 # --- Hardware Optimization ---
 torch.backends.cudnn.benchmark = True
@@ -30,7 +30,6 @@ LEARNING_RATE = 0.001
 FEN_CHARS = "1RNBQKPrnbqkp"
 USE_GRAYSCALE = True
 
-# Smarter Device Detection
 if torch.cuda.is_available():
     DEVICE = torch.device("cuda")
 elif torch.backends.mps.is_available():
@@ -39,15 +38,59 @@ else:
     DEVICE = torch.device("cpu")
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
-# Check both local (../) and server (./) paths
 tiles_dir = os.path.join(base_dir, "images", "tiles_real")
 if not os.path.exists(tiles_dir):
     tiles_dir = os.path.join(base_dir, "..", "images", "tiles_real")
 
 output_model = os.path.join(base_dir, "models", "model_80k_beast_v4.pt")
 checkpoint_path = os.path.join(base_dir, "models", "checkpoint_80k_beast_v4.pt")
-
 os.makedirs(os.path.join(base_dir, "models"), exist_ok=True)
+
+class LazyChessBoardDataset(Dataset):
+    """
+    Lazy Loader: Instead of scanning 5 million files at startup, 
+    we just list board directories and find tiles on-the-fly.
+    """
+    def __init__(self, board_dirs, fen_chars, use_grayscale=True, transform=None):
+        self.board_dirs = board_dirs
+        self.fen_chars = fen_chars
+        self.use_grayscale = use_grayscale
+        self.transform = transform
+        self.tiles_per_board = 64
+        
+    def __len__(self):
+        return len(self.board_dirs) * self.tiles_per_board
+
+    def __getitem__(self, idx):
+        board_idx = idx // self.tiles_per_board
+        tile_idx = idx % self.tiles_per_board
+        
+        board_path = self.board_dirs[board_idx]
+        
+        # Cache the list of tiles for this board to avoid repeated re-scanning
+        # We assume files are consistent in each folder
+        if not hasattr(self, '_current_board') or self._current_board != board_path:
+            self._current_board = board_path
+            self._tile_paths = sorted([os.path.join(board_path, f) for f in os.listdir(board_path) if f.endswith('.png')])
+        
+        # In case a board has fewer than 64 tiles, wrap around
+        image_path = self._tile_paths[tile_idx % len(self._tile_paths)]
+        
+        # Extract label (piece type is at index -5: "path/to/tile_P.png")
+        piece_type = image_path[-5]
+        label = self.fen_chars.index(piece_type)
+        
+        # Load image
+        img = Image.open(image_path)
+        if self.use_grayscale:
+            img = img.convert('L')
+        else:
+            img = img.convert('RGB')
+            
+        if self.transform:
+            img = self.transform(img)
+            
+        return img, label
 
 class FocalLoss(nn.Module):
     def __init__(self, alpha=1, gamma=2):
@@ -86,65 +129,38 @@ def format_time(seconds):
     return str(timedelta(seconds=int(seconds)))
 
 def main():
-    print(f"🐉 BEAST V4 - Target: {DEVICE}", flush=True)
+    print(f"🐉 BEAST V4 (LAZY) - Target: {DEVICE}", flush=True)
     print(f"📂 Tiles Source: {tiles_dir}", flush=True)
     
     if not os.path.exists(tiles_dir):
         print(f"❌ Directory not found: {tiles_dir}", flush=True)
         return
 
-    print("🔍 Scanning board directories (fast scan)...", flush=True)
-    board_dirs = []
-    # os.scandir is 10x-100x faster than glob for 80k folders
-    with os.scandir(tiles_dir) as it:
-        for entry in it:
-            if entry.is_dir():
-                board_dirs.append(entry.path)
-                if len(board_dirs) % 10000 == 0:
-                    print(f"  ...found {len(board_dirs)} boards", flush=True)
+    print("🔍 Listing board directories...", flush=True)
+    board_dirs = sorted([f.path for f in os.scandir(tiles_dir) if f.is_dir()])
     
-    board_dirs.sort()
     if not board_dirs:
         print(f"❌ No subdirectories found at {tiles_dir}", flush=True)
         return
 
-    print(f"✅ Found {len(board_dirs)} boards. Splitting data...", flush=True)
+    print(f"✅ Found {len(board_dirs)} boards. Total estimated tiles: {len(board_dirs)*64}", flush=True)
     np.random.seed(42)
     np.random.shuffle(board_dirs)
     split = int(len(board_dirs) * 0.8)
     train_dirs, val_dirs = board_dirs[:split], board_dirs[split:]
 
-    def get_paths(dirs, label):
-        p = []
-        total = len(dirs)
-        for i, d in enumerate(dirs):
-            if i % 1000 == 0:
-                print(f"\r  [{label}] Tile Scan: {i}/{total} boards...", end="", flush=True)
-            with os.scandir(d) as it:
-                for entry in it:
-                    if entry.is_file() and entry.name.endswith(".png"):
-                        p.append(entry.path)
-        print(f"\n  [{label}] Done. Total tiles: {len(p)}", flush=True)
-        return np.array(p)
-
-    train_paths = get_paths(train_dirs, "Train")
-    val_paths = get_paths(val_dirs, "Val")
-    
-    if len(train_paths) == 0:
-        print("❌ No images found in directories!", flush=True)
-        return
-
     num_cpus = os.cpu_count() or 4
-    train_ds = ChessTileDataset(train_paths, FEN_CHARS, USE_GRAYSCALE, create_image_transforms(USE_GRAYSCALE))
-    val_ds = ChessTileDataset(val_paths, FEN_CHARS, USE_GRAYSCALE, create_image_transforms(USE_GRAYSCALE))
+    train_ds = LazyChessBoardDataset(train_dirs, FEN_CHARS, USE_GRAYSCALE, create_image_transforms(USE_GRAYSCALE))
+    val_ds = LazyChessBoardDataset(val_dirs, FEN_CHARS, USE_GRAYSCALE, create_image_transforms(USE_GRAYSCALE))
 
+    # Workers do the disk searching in parallel during training
     train_loader = DataLoader(
         train_ds, batch_size=BATCH_SIZE, shuffle=True, 
-        num_workers=num_cpus, pin_memory=True, persistent_workers=True, prefetch_factor=2
+        num_workers=num_cpus, pin_memory=True, prefetch_factor=2
     )
     val_loader = DataLoader(
         val_ds, batch_size=BATCH_SIZE, shuffle=False, 
-        num_workers=num_cpus, pin_memory=True, persistent_workers=True
+        num_workers=num_cpus, pin_memory=True
     )
 
     model = UltraEnhancedChessPieceClassifier(num_classes=len(FEN_CHARS), use_grayscale=USE_GRAYSCALE).to(DEVICE)
@@ -203,7 +219,7 @@ def main():
             total += labels.size(0)
             correct += (pred == labels).sum().item()
 
-            if i % 100 == 0:
+            if i % 10 == 0:
                 mem = get_memory_stats()
                 print(f"\rEpoch {epoch+1} [{i}/{len(train_loader)}] | Loss: {loss.item():.4f} | Data: {data_time:.3f}s | {mem}", end="", flush=True)
             
@@ -224,7 +240,6 @@ def main():
         
         val_acc = val_correct / val_total
         epoch_time = time.time() - epoch_start
-        # ETA calculation fix to avoid division by zero
         elapsed = time.time() - total_start
         completed = epoch - start_epoch + 1
         eta = (EPOCHS - epoch - 1) * (elapsed / completed)
