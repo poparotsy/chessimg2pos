@@ -47,16 +47,15 @@ checkpoint_path = os.path.join(base_dir, "models", "checkpoint_80k_beast_v4.pt")
 os.makedirs(os.path.join(base_dir, "models"), exist_ok=True)
 
 class LazyChessBoardDataset(Dataset):
-    """
-    Lazy Loader: Instead of scanning 5 million files at startup, 
-    we just list board directories and find tiles on-the-fly.
-    """
     def __init__(self, board_dirs, fen_chars, use_grayscale=True, transform=None):
         self.board_dirs = board_dirs
         self.fen_chars = fen_chars
         self.use_grayscale = use_grayscale
         self.transform = transform
         self.tiles_per_board = 64
+        # Cache to avoid repeated disk scans
+        self.last_board_idx = -1
+        self.cached_tiles = []
         
     def __len__(self):
         return len(self.board_dirs) * self.tiles_per_board
@@ -65,28 +64,22 @@ class LazyChessBoardDataset(Dataset):
         board_idx = idx // self.tiles_per_board
         tile_idx = idx % self.tiles_per_board
         
-        board_path = self.board_dirs[board_idx]
+        # Only scan the directory if we've moved to a new board
+        if board_idx != self.last_board_idx:
+            board_path = self.board_dirs[board_idx]
+            self.cached_tiles = sorted([os.path.join(board_path, f) for f in os.listdir(board_path) if f.endswith('.png')])
+            self.last_board_idx = board_idx
         
-        # Cache the list of tiles for this board to avoid repeated re-scanning
-        # We assume files are consistent in each folder
-        if not hasattr(self, '_current_board') or self._current_board != board_path:
-            self._current_board = board_path
-            self._tile_paths = sorted([os.path.join(board_path, f) for f in os.listdir(board_path) if f.endswith('.png')])
-        
-        # In case a board has fewer than 64 tiles, wrap around
-        image_path = self._tile_paths[tile_idx % len(self._tile_paths)]
-        
-        # Extract label (piece type is at index -5: "path/to/tile_P.png")
+        if not self.cached_tiles:
+            # Fallback if directory is empty
+            return torch.zeros((1 if self.use_grayscale else 3, 32, 32)), 0
+
+        image_path = self.cached_tiles[tile_idx % len(self.cached_tiles)]
         piece_type = image_path[-5]
         label = self.fen_chars.index(piece_type)
         
-        # Load image
         img = Image.open(image_path)
-        if self.use_grayscale:
-            img = img.convert('L')
-        else:
-            img = img.convert('RGB')
-            
+        img = img.convert('L' if self.use_grayscale else 'RGB')
         if self.transform:
             img = self.transform(img)
             
@@ -153,14 +146,17 @@ def main():
     train_ds = LazyChessBoardDataset(train_dirs, FEN_CHARS, USE_GRAYSCALE, create_image_transforms(USE_GRAYSCALE))
     val_ds = LazyChessBoardDataset(val_dirs, FEN_CHARS, USE_GRAYSCALE, create_image_transforms(USE_GRAYSCALE))
 
-    # Workers do the disk searching in parallel during training
+    # Boards are already shuffled above, so we set shuffle=False here
+    # This allows the Lazy cache to work and kills the 14s lag
     train_loader = DataLoader(
-        train_ds, batch_size=BATCH_SIZE, shuffle=True, 
-        num_workers=num_cpus, pin_memory=True, prefetch_factor=2
+        train_ds, batch_size=BATCH_SIZE, shuffle=False, 
+        num_workers=num_cpus, pin_memory=True, prefetch_factor=4,
+        persistent_workers=True
     )
     val_loader = DataLoader(
         val_ds, batch_size=BATCH_SIZE, shuffle=False, 
-        num_workers=num_cpus, pin_memory=True
+        num_workers=num_cpus, pin_memory=True, prefetch_factor=2,
+        persistent_workers=True
     )
 
     model = UltraEnhancedChessPieceClassifier(num_classes=len(FEN_CHARS), use_grayscale=USE_GRAYSCALE).to(DEVICE)
