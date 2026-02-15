@@ -155,12 +155,30 @@ def main():
 
     start_epoch, best_acc = 0, 0.0
     if os.path.exists(checkpoint_path):
+        print(f"🔄 Resuming from checkpoint: {checkpoint_path}", flush=True)
         ckpt = torch.load(checkpoint_path, map_location=DEVICE)
-        model.load_state_dict(ckpt['model_state_dict'])
+        
+        # Handle DataParallel 'module.' prefix automatically
+        state_dict = ckpt['model_state_dict']
+        is_dp_model = isinstance(model, nn.DataParallel)
+        has_dp_prefix = any(k.startswith('module.') for k in state_dict.keys())
+        
+        if is_dp_model and not has_dp_prefix:
+            state_dict = {f'module.{k}': v for k, v in state_dict.items()}
+        elif not is_dp_model and has_dp_prefix:
+            state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
+            
+        model.load_state_dict(state_dict)
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
-        scheduler.load_state_dict(ckpt['scheduler_state_dict'])
+        # Only resume scheduler if we aren't changing batch sizes dramatically
+        try:
+            scheduler.load_state_dict(ckpt['scheduler_state_dict'])
+        except:
+            print("⚠️ Note: Scheduler reset due to config change.", flush=True)
+            
         start_epoch = ckpt['epoch'] + 1
         best_acc = ckpt['best_acc']
+        print(f"✅ Resumed from Epoch {start_epoch} (Best Acc: {best_acc:.4f})", flush=True)
 
     total_start = time.time()
     for epoch in range(start_epoch, EPOCHS):
