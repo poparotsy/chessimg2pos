@@ -144,7 +144,11 @@ def main():
 
     num_cpus = os.cpu_count() or 4
     train_ds = LazyChessBoardDataset(train_dirs, FEN_CHARS, USE_GRAYSCALE, create_image_transforms(USE_GRAYSCALE))
-    val_ds = LazyChessBoardDataset(val_dirs, FEN_CHARS, USE_GRAYSCALE, create_image_transforms(USE_GRAYSCALE))
+    
+    # Speed Fix: Only validate on 1000 boards (64k tiles) instead of 16k boards
+    # This makes validation take ~30 seconds instead of 20 minutes.
+    val_subset = val_dirs[:1000]
+    val_ds = LazyChessBoardDataset(val_subset, FEN_CHARS, USE_GRAYSCALE, create_image_transforms(USE_GRAYSCALE))
 
     # Boards are already shuffled above, so we set shuffle=False here
     # This allows the Lazy cache to work and kills the 14s lag
@@ -231,8 +235,12 @@ def main():
         
         model.eval()
         val_correct, val_total = 0, 0
+        print("\n🔍 Validating (on 1000 boards)...", flush=True)
         with torch.no_grad():
-            for inputs, labels in val_loader:
+            for j, (inputs, labels) in enumerate(val_loader):
+                if j % 10 == 0:
+                    print(f"\r  Progress: [{j}/{len(val_loader)}]", end="", flush=True)
+                
                 inputs, labels = inputs.to(DEVICE, non_blocking=True), labels.to(DEVICE, non_blocking=True)
                 with torch.autocast(device_type=DEVICE.type, enabled=(DEVICE.type != 'cpu')):
                     outputs = model(inputs)
@@ -240,6 +248,7 @@ def main():
                 val_total += labels.size(0)
                 val_correct += (pred == labels).sum().item()
         
+        print(f"\r  Progress: Done!", flush=True)
         val_acc = val_correct / val_total
         epoch_time = time.time() - epoch_start
         elapsed = time.time() - total_start
