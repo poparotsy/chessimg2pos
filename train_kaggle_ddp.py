@@ -96,6 +96,15 @@ train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, sampler=train_sampler
 val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, sampler=val_sampler,
                         num_workers=2, pin_memory=True)
 
+if is_main:
+    print(f"✅ DataLoaders ready: {len(train_loader)} train batches, {len(val_loader)} val batches")
+
+if len(train_loader) == 0:
+    if is_main:
+        print("❌ No training data available")
+    cleanup_ddp()
+    sys.exit(1)
+
 # ============ MODEL ============
 if is_main:
     print("🧠 Creating model...")
@@ -113,7 +122,7 @@ criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
 scheduler = torch.optim.lr_scheduler.OneCycleLR(
     optimizer, max_lr=LEARNING_RATE*2,
-    steps_per_epoch=len(train_loader), epochs=EPOCHS
+    steps_per_epoch=max(len(train_loader), 1), epochs=EPOCHS
 )
 scaler = GradScaler('cuda')
 
