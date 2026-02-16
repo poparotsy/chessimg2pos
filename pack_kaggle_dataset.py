@@ -14,16 +14,24 @@ from PIL import Image
 import concurrent.futures
 from datetime import timedelta
 
+import argparse
+
+# ============ ARGUMENT PARSING ============
+parser = argparse.ArgumentParser(description='Tensor Packer Beast')
+parser.add_argument('--input-dir', type=str, help='Path to tiles_real directory')
+parser.add_argument('--chunks', type=int, default=10, help='Number of chunks to split into')
+args = parser.parse_args()
+
 # ============ CONFIG ============
 FEN_CHARS = "1RNBQKPrnbqkp"
 USE_GRAYSCALE = True
-CHUNKS = 10
+CHUNKS = args.chunks
 NUM_CPU_WORKERS = os.cpu_count() or 4
 
 # ============ PATHS ============
 base_dir = os.path.dirname(os.path.abspath(__file__))
-tiles_dir = os.path.join(base_dir, "images", "tiles_real")
-if not os.path.exists(tiles_dir):
+tiles_dir = args.input_dir if args.input_dir else os.path.join(base_dir, "images", "tiles_real")
+if not os.path.exists(tiles_dir) and not args.input_dir:
     tiles_dir = os.path.abspath(os.path.join(base_dir, "..", "images", "tiles_real"))
 
 output_dir = os.path.join(base_dir, "tensor_dataset")
