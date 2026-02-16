@@ -175,18 +175,14 @@ model = UltraEnhancedChessPieceClassifier(
 ).to(device)
 
 if torch.cuda.device_count() > 1:
-    print(f"🚀 Multiple GPUs detected ({torch.cuda.device_count()}), but using single GPU for better performance")
-    # DataParallel has high overhead - single GPU is often faster
-    # model = nn.DataParallel(model)
+    print(f"🚀 DataParallel enabled ({torch.cuda.device_count()} GPUs)")
+    model = nn.DataParallel(model)
 print()
 
 # ============ TRAINING SETUP ============
 criterion = nn.CrossEntropyLoss()
-optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
-scheduler = torch.optim.lr_scheduler.OneCycleLR(
-    optimizer, max_lr=LEARNING_RATE*2,
-    steps_per_epoch=len(train_loader), epochs=EPOCHS
-)
+optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=2)
 scaler = GradScaler('cuda')
 
 # ============ CHECKPOINT ============
@@ -241,7 +237,6 @@ for epoch in range(start_epoch, EPOCHS):
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
-        scheduler.step()
         
         # Defer synchronization - only compute metrics every N batches
         if batch_idx % 50 == 0 or batch_idx == len(train_loader) - 1:
@@ -296,6 +291,9 @@ for epoch in range(start_epoch, EPOCHS):
             val_correct += (pred == labels).sum().item()
     
     val_acc = val_correct / val_total
+    
+    # Step scheduler based on validation accuracy
+    scheduler.step(val_acc)
     
     # === TIMING ===
     epoch_time = time.time() - epoch_start
