@@ -37,7 +37,7 @@ parser.add_argument('--epochs', type=int, default=25, help='Number of epochs')
 parser.add_argument('--batch-size', type=int, default=4096, help='Batch size (Optimized for DataParallel)')
 parser.add_argument('--lr', type=float, default=0.003, help='Learning rate')
 parser.add_argument('--vram-chunk-size', type=int, default=500000, help='Number of images to load into VRAM per chunk (e.g., 500000)')
-parser.add_argument('--num-cpu-workers', type=int, default=os.cpu_count(), help='Number of CPU workers for parallel pre-loading')
+parser.add_argument('--num-cpu-workers', type=int, default=4, help='Number of CPU workers for parallel pre-loading (more than 4 might cause errors on Kaggle).')
 args = parser.parse_args()
 
 # ============ CONFIG ============
@@ -370,8 +370,7 @@ for epoch in range(start_epoch, EPOCHS):
     
     print() # Newline for next epoch or completion message
 
-print("
-" + "="*70)
+print("\n" + "="*70)
 print(f"🎉 STREAM TURBO COMPLETE! Best Acc: {best_acc:.2%}")
 print(f"🕒 Total Time: {format_time(time.time() - total_start)}")
 print(f"💾 Model: {output_model}")
