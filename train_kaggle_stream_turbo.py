@@ -238,6 +238,8 @@ val_streaming_ds = VramStreamingDataset(
 )
 
 print("\n🎉 Initial VRAM chunks loaded. Commencing training loop...\n")
+print(f"DEBUG: train_streaming_ds.num_chunks = {train_streaming_ds.num_chunks}")
+print(f"DEBUG: val_streaming_ds.num_chunks = {val_streaming_ds.num_chunks}\n")
 
 
 # ============ MODEL ============
@@ -326,7 +328,7 @@ for epoch in range(start_epoch, EPOCHS):
             # Print per-batch progress
             if num_batches_processed % 50 == 0: # Update every 50 batches
                 progress = (num_batches_processed * BATCH_SIZE) / len(train_streaming_ds) * 100
-                print(f"\rEpoch {epoch+1:2d}/{EPOCHS} | Chunk {chunk_idx+1}/{train_streaming_ds.num_chunks} | "
+                print(f"\rEpoch {epoch+1:2d}/{EPOCHS} | Train Chunk {chunk_idx+1}/{train_streaming_ds.num_chunks} | Batch {batch_num+1}/{len(chunk_loader)} | "
                       f"Batch {num_batches_processed} | Loss: {loss.item():.4f} | Acc: {correct/total:.4f} | "
                       f"Prog: {progress:.1f}% | {get_gpu_mem()}", end="", flush=True)
 
