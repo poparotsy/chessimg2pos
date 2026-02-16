@@ -180,8 +180,7 @@ if torch.cuda.device_count() > 1:
 print()
 
 # ============ TRAINING SETUP ============
-focal_loss = FocalLoss(alpha=1, gamma=2)
-smooth_loss = LabelSmoothingLoss(classes=len(FEN_CHARS), smoothing=0.1)
+criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
 scheduler = torch.optim.lr_scheduler.OneCycleLR(
     optimizer, max_lr=LEARNING_RATE*2,
@@ -236,7 +235,7 @@ for epoch in range(start_epoch, EPOCHS):
         
         with autocast('cuda'):
             outputs = model(inputs)
-            loss = 0.7 * focal_loss(outputs, labels) + 0.3 * smooth_loss(outputs, labels)
+            loss = criterion(outputs, labels)
         
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
