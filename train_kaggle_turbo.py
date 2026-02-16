@@ -149,7 +149,7 @@ val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
 # ============ MODEL ============
 model = UltraEnhancedChessPieceClassifier(
     num_classes=len(FEN_CHARS),
-    use_grayscale=USE_GRAYSCALE
+    use_grayscale=USE_GRAYCALE
 ).to(device)
 
 if torch.cuda.device_count() > 1:
@@ -165,59 +165,35 @@ scheduler = torch.optim.lr_scheduler.OneCycleLR(
 )
 scaler = GradScaler('cuda')
 
+# ============ CHECKPOINT ============
+start_epoch, best_acc = 0, 0.0
+if os.path.exists(checkpoint_path):
+    print(f"🔄 Loading checkpoint...")
+    ckpt = torch.load(checkpoint_path, map_location=device)
+    
+    state_dict = ckpt['model_state_dict']
+    is_dp = isinstance(model, nn.DataParallel)
+    has_prefix = any(k.startswith('module.') for k in state_dict.keys())
+    
+    if is_dp and not has_prefix:
+        state_dict = {f'module.{k}': v for k, v in state_dict.items()}
+    elif not is_dp and has_prefix:
+        state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
+    
+    model.load_state_dict(state_dict)
+    optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+    if 'scheduler_state_dict' in ckpt: # Scheduler might not be saved in older ckpts
+        scheduler.load_state_dict(ckpt['scheduler_state_dict'])
+    if 'scaler_state_dict' in ckpt: # Scaler might not be saved in older ckpts
+        scaler.load_state_dict(ckpt['scaler_state_dict'])
+    
+    start_epoch = ckpt['epoch'] + 1
+    best_acc = ckpt['best_acc']
+    print(f"✅ Resumed from epoch {start_epoch} (Best: {best_acc:.4f})\n")
+
 # ============ TRAINING ============
-print("\n" + "="*70)
 print(f"🚀 TURBO TRAINING - {EPOCHS} Epochs | Batch {BATCH_SIZE}")
 print("="*70 + "\n")
-
-total_start = time.time()
-best_acc = 0.0
-
-for epoch in range(EPOCHS):
-    epoch_start = time.time()
-    model.train()
-    
-    train_loss, correct, total = 0.0, 0, 0
-    
-    for x, y in train_loader:
-        optimizer.zero_grad(set_to_none=True)
-        
-        with autocast('cuda'):
-            outputs = model(x)
-            loss = criterion(outputs, y)
-        
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
-        scheduler.step()
-        
-        _, pred = torch.max(outputs, 1)
-        total += y.size(0)
-        correct += (pred == y).sum().item()
-    
-    train_acc = correct / total
-    
-    # Validation
-    model.eval()
-    val_correct, val_total = 0, 0
-    with torch.no_grad():
-        for x, y in val_loader:
-            with autocast('cuda'):
-                outputs = model(x)
-            _, pred = torch.max(outputs, 1)
-            val_total += y.size(0)
-            val_correct += (pred == y).sum().item()
-    
-    val_acc = val_correct / val_total
-    epoch_time = time.time() - epoch_start
-    
-    print(f"Epoch {epoch+1:2d}/{EPOCHS} | Train Acc: {train_acc:.4f} | Val Acc: {val_acc:.4f} | "
-          f"Time: {epoch_time:.1f}s | {get_gpu_mem()}")
-    
-    if val_acc > best_acc:
-        best_acc = val_acc
-        model_to_save = model.module if isinstance(model, nn.DataParallel) else model
-        torch.save(model_to_save.state_dict(), output_model)
 
 print("\n" + "="*70)
 print(f"🎉 TURBO COMPLETE! Best Acc: {best_acc:.2%}")
