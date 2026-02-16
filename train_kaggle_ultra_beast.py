@@ -229,25 +229,19 @@ for epoch in range(start_epoch, EPOCHS):
     for batch_idx, (inputs, labels) in enumerate(train_loader):
         batch_start = time.time()
         
-        t0 = time.time()
         inputs = inputs.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
-        t_transfer = time.time() - t0
         
         optimizer.zero_grad(set_to_none=True)
         
-        t0 = time.time()
         with autocast('cuda'):
             outputs = model(inputs)
             loss = criterion(outputs, labels)
-        t_forward = time.time() - t0
         
-        t0 = time.time()
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
         scheduler.step()
-        t_backward = time.time() - t0
         
         # Defer synchronization - only compute metrics every N batches
         if batch_idx % 50 == 0 or batch_idx == len(train_loader) - 1:
@@ -258,12 +252,8 @@ for epoch in range(start_epoch, EPOCHS):
         
         batch_time = time.time() - batch_start
         batch_times.append(batch_time)
-        if len(batch_times) > 100:  # Keep only last 100
+        if len(batch_times) > 100:
             batch_times.pop(0)
-        
-        # Print timing breakdown every 10 batches
-        if batch_idx % 10 == 0:
-            print(f"\nBatch {batch_idx}: Total={batch_time:.3f}s | Transfer={t_transfer:.3f}s | Forward={t_forward:.3f}s | Backward={t_backward:.3f}s", flush=True)
         
         # Real-time progress (update every 50 batches for speed)
         if batch_idx % 50 == 0 or batch_idx == len(train_loader) - 1:
