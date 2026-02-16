@@ -113,7 +113,6 @@ class VramStreamingDataset(Dataset):
         if chunk_idx >= self.num_chunks:
             return None
 
-        print(f"📦 Pre-loading VRAM chunk {chunk_idx + 1}/{self.num_chunks}...")
         chunk_start_idx = chunk_idx * self.vram_chunk_size
         chunk_end_idx = min((chunk_idx + 1) * self.vram_chunk_size, len(self.all_image_paths))
         chunk_paths_with_idx = [(i, self.all_image_paths[i]) for i in range(chunk_start_idx, chunk_end_idx)]
@@ -125,19 +124,12 @@ class VramStreamingDataset(Dataset):
                    for p_idx_tuple in chunk_paths_with_idx]
         
         processed_results = []
-        errors = 0
         for future in concurrent.futures.as_completed(futures):
             result = future.result()
             if result is not None:
                 processed_results.append(result)
-            else:
-                errors += 1
         
-        if errors > 0:
-            print(f"   ⚠️ Warning: Skipped {errors} invalid or corrupt images in chunk {chunk_idx + 1}.")
-
         if not processed_results:
-            print(f"❌ Error: No valid images loaded for chunk {chunk_idx + 1}!")
             return None # Indicate failed chunk load
 
         # Sort by original index to maintain order
@@ -159,9 +151,6 @@ class VramStreamingDataset(Dataset):
         # Move to GPU NOW
         x = x.to(self.device)
         y = y.to(self.device)
-        
-        elapsed = time.time() - start_time
-        print(f"✅ Chunk {chunk_idx + 1} Loaded: {elapsed:.1f}s | {x.element_size() * x.nelement() / 1e6:.1f}MB in VRAM")
         
         return (x, y)
 
