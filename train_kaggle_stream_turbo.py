@@ -307,7 +307,8 @@ for epoch in range(start_epoch, EPOCHS):
         chunk_dataset = TensorDataset(current_chunk_x, current_chunk_y)
         chunk_loader = DataLoader(chunk_dataset, batch_size=BATCH_SIZE, shuffle=True)
 
-        for x, y in chunk_loader:
+        for batch_num, (x, y) in enumerate(chunk_loader):
+            batch_start = time.time()
             optimizer.zero_grad(set_to_none=True)
             
             with autocast('cuda'):
@@ -319,6 +320,8 @@ for epoch in range(start_epoch, EPOCHS):
             scaler.update()
             scheduler.step() # Step per batch
             
+            gpu_time_ms = (time.time() - batch_start) * 1000
+            
             _, pred = torch.max(outputs, 1)
             total += y.size(0)
             correct += (pred == y).sum().item()
@@ -326,11 +329,11 @@ for epoch in range(start_epoch, EPOCHS):
             num_batches_processed += 1
             
             # Print per-batch progress
-            if num_batches_processed % 50 == 0: # Update every 50 batches
+            if num_batches_processed % 10 == 0: # Update more frequently
                 progress = (num_batches_processed * BATCH_SIZE) / len(train_streaming_ds) * 100
-                print(f"\rEpoch {epoch+1:2d}/{EPOCHS} | Train Chunk {chunk_idx+1}/{train_streaming_ds.num_chunks} | Batch {batch_num+1}/{len(chunk_loader)} | "
-                      f"Batch {num_batches_processed} | Loss: {loss.item():.4f} | Acc: {correct/total:.4f} | "
-                      f"Prog: {progress:.1f}% | {get_gpu_mem()}", end="", flush=True)
+                print(f"\rEpoch {epoch+1:2d}/{EPOCHS} | Train Chunk {chunk_idx+1}/{train_streaming_ds.num_chunks} | "
+                      f"Batch {batch_num+1}/{len(chunk_loader)} | GPU Time: {gpu_time_ms:.1f}ms | Loss: {loss.item():.4f} | "
+                      f"Acc: {correct/total:.4f} | Prog: {progress:.1f}% | {get_gpu_mem()}", end="", flush=True)
 
     train_acc = correct / total
     
@@ -338,22 +341,30 @@ for epoch in range(start_epoch, EPOCHS):
     model.eval()
     val_correct, val_total = 0, 0
     val_loss = 0.0
+    val_batches_processed = 0
     with torch.no_grad():
         for chunk_idx in range(val_streaming_ds.num_chunks):
             current_chunk_x, current_chunk_y = val_streaming_ds._get_chunk(chunk_idx)
             chunk_dataset = TensorDataset(current_chunk_x, current_chunk_y)
             chunk_loader = DataLoader(chunk_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
-            for x, y in chunk_loader:
+            for batch_num, (x, y) in enumerate(chunk_loader):
+                batch_start = time.time()
                 with autocast('cuda'):
                     outputs = model(x)
                 
-                loss = criterion(outputs, y) # For val_loss reporting
+                loss = criterion(outputs, y)
                 val_loss += loss.item()
 
+                gpu_time_ms = (time.time() - batch_start) * 1000
                 _, pred = torch.max(outputs, 1)
                 val_total += y.size(0)
                 val_correct += (pred == y).sum().item()
+                val_batches_processed += 1
+
+                if val_batches_processed % 10 == 0:
+                    print(f"\rValidation | Chunk {chunk_idx+1}/{val_streaming_ds.num_chunks} | Batch {batch_num+1}/{len(chunk_loader)} | "
+                          f"GPU Time: {gpu_time_ms:.1f}ms | Acc: {val_correct/val_total:.4f} | {get_gpu_mem()}", end="", flush=True)
     
     val_acc = val_correct / val_total
     epoch_time = time.time() - epoch_start
