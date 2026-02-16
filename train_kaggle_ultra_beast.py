@@ -245,16 +245,18 @@ for epoch in range(start_epoch, EPOCHS):
         scaler.update()
         scheduler.step()
         
-        train_loss += loss.item()
-        _, pred = torch.max(outputs, 1)
-        total += labels.size(0)
-        correct += (pred == labels).sum().item()
+        # Defer synchronization - only compute metrics every N batches
+        if batch_idx % 50 == 0 or batch_idx == len(train_loader) - 1:
+            train_loss += loss.item()
+            _, pred = torch.max(outputs, 1)
+            total += labels.size(0)
+            correct += (pred == labels).sum().item()
         
         batch_time = time.time() - batch_start
         batch_times.append(batch_time)
         
-        # Real-time progress (update every 2 batches for speed)
-        if batch_idx % 2 == 0 or batch_idx == len(train_loader) - 1:
+        # Real-time progress (update every 50 batches for speed)
+        if batch_idx % 50 == 0 or batch_idx == len(train_loader) - 1:
             progress = (batch_idx + 1) / len(train_loader)
             avg_batch_time = np.mean(batch_times[-10:])
             batches_left = len(train_loader) - (batch_idx + 1)
