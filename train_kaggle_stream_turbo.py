@@ -237,6 +237,8 @@ val_streaming_ds = VramStreamingDataset(
     all_val_paths, FEN_CHARS, USE_GRAYSCALE, VRAM_CHUNK_SIZE, NUM_CPU_WORKERS, device
 )
 
+print("\n🎉 Initial VRAM chunks loaded. Commencing training loop...\n")
+
 
 # ============ MODEL ============
 model = UltraEnhancedChessPieceClassifier(
@@ -320,6 +322,13 @@ for epoch in range(start_epoch, EPOCHS):
             correct += (pred == y).sum().item()
             train_loss += loss.item()
             num_batches_processed += 1
+            
+            # Print per-batch progress
+            if num_batches_processed % 50 == 0: # Update every 50 batches
+                progress = (num_batches_processed * BATCH_SIZE) / len(train_streaming_ds) * 100
+                print(f"\rEpoch {epoch+1:2d}/{EPOCHS} | Chunk {chunk_idx+1}/{train_streaming_ds.num_chunks} | "
+                      f"Batch {num_batches_processed} | Loss: {loss.item():.4f} | Acc: {correct/total:.4f} | "
+                      f"Prog: {progress:.1f}% | {get_gpu_mem()}", end="", flush=True)
 
     train_acc = correct / total
     
