@@ -71,30 +71,55 @@ def get_gpu_mem():
         return " ".join(mem_info)
     return "N/A"
 
+import concurrent.futures
+# ... other imports ...
+
 # ============ TURBO VRAM LOADING ============
 def load_to_vram(paths, label_tag):
-    print(f"📦 Pre-loading {label_tag} tiles ({len(paths):,}) into VRAM...")
+    print(f"📦 Pre-loading {label_tag} tiles ({len(paths):,}) into VRAM with parallel CPU workers...")
     start_time = time.time()
-    imgs = []
-    lbls = []
     
-    for i, path in enumerate(paths):
-        # Piece type is the char before .png (e.g., .../f8_q.png -> q)
+    # Helper function to process a single image
+    def process_single_image(path):
         piece_type = path[-5]
         if piece_type not in FEN_CHARS:
-            continue
-            
+            return None # Skip invalid piece types
+
         try:
-            # Load and decode ONCE
             img = Image.open(path).convert("L" if USE_GRAYSCALE else "RGB")
             img = img.resize((32, 32))
-            imgs.append(np.array(img, dtype=np.uint8))
-            lbls.append(FEN_CHARS.index(piece_type))
-        except:
-            continue
+            return np.array(img, dtype=np.uint8), FEN_CHARS.index(piece_type)
+        except Exception:
+            return None # Skip corrupt images
+
+    imgs = []
+    lbls = []
+    errors = 0
+    
+    # Use ThreadPoolExecutor for parallel I/O and CPU-bound image processing
+    # Max workers is os.cpu_count() or a reasonable default like 8
+    max_workers = os.cpu_count() if os.cpu_count() else 8
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(process_single_image, path): path for path in paths}
+        for i, future in enumerate(concurrent.futures.as_completed(futures)):
+            result = future.result()
+            if result is not None:
+                img_arr, label = result
+                imgs.append(img_arr)
+                lbls.append(label)
+            else:
+                errors += 1
             
-        if (i + 1) % 20000 == 0:
-            print(f"   Processed {i+1}/{len(paths)}...")
+            if (i + 1) % 50000 == 0: # Print progress more frequently for large datasets
+                print(f"   Processed {i+1}/{len(paths)} images...")
+    
+    if errors > 0:
+        print(f"   ⚠️ Warning: Skipped {errors} invalid or corrupt images.")
+
+    if not imgs:
+        print(f"❌ Error: No valid images loaded for {label_tag} dataset!")
+        sys.exit(1)
 
     # Convert to Tensors
     x = torch.from_numpy(np.stack(imgs)).float()
