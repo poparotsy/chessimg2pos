@@ -226,8 +226,7 @@ def get_paths(dirs):
 print(f"🔍 Found {len(train_dirs):,} training boards and {len(val_dirs):,} validation boards.")
 all_train_paths = get_paths(train_dirs)
 all_val_paths = get_paths(val_dirs)
-print(f"📊 Total training images: {len(all_train_paths):,} | Total validation images: {len(all_val_paths):,}
-")
+print(f"📊 Total training images: {len(all_train_paths):,} | Total validation images: {len(all_val_paths):,}\n")
 
 
 # Create Streaming Datasets
@@ -283,13 +282,11 @@ if os.path.exists(checkpoint_path):
     
     start_epoch = ckpt['epoch'] + 1
     best_acc = ckpt['best_acc']
-    print(f"✅ Resumed from epoch {start_epoch} (Best: {best_acc:.4f})
-")
+    print(f"✅ Resumed from epoch {start_epoch} (Best: {best_acc:.4f})\n")
 
 # ============ TRAINING LOOP ============
 print(f"🚀 STREAM TURBO TRAINING - {EPOCHS} Epochs | Batch {BATCH_SIZE} | Chunk Size {VRAM_CHUNK_SIZE}")
-print("="*70 + "
-")
+print("="*70 + "\n")
 
 total_start = time.time()
 
