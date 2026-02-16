@@ -175,8 +175,9 @@ model = UltraEnhancedChessPieceClassifier(
 ).to(device)
 
 if torch.cuda.device_count() > 1:
-    print(f"🚀 DataParallel enabled ({torch.cuda.device_count()} GPUs)")
-    model = nn.DataParallel(model)
+    print(f"🚀 Multiple GPUs detected ({torch.cuda.device_count()}), but using single GPU for better performance")
+    # DataParallel has high overhead - single GPU is often faster
+    # model = nn.DataParallel(model)
 print()
 
 # ============ TRAINING SETUP ============
