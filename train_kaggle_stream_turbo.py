@@ -237,9 +237,7 @@ val_streaming_ds = VramStreamingDataset(
     all_val_paths, FEN_CHARS, USE_GRAYSCALE, VRAM_CHUNK_SIZE, NUM_CPU_WORKERS, device
 )
 
-print("\n🎉 Initial VRAM chunks loaded. Commencing training loop...\n")
-print(f"DEBUG: train_streaming_ds.num_chunks = {train_streaming_ds.num_chunks}")
-print(f"DEBUG: val_streaming_ds.num_chunks = {val_streaming_ds.num_chunks}\n")
+print(f"✅ Streaming Datasets ready ({train_streaming_ds.num_chunks} train chunks, {val_streaming_ds.num_chunks} val chunks)\n")
 
 
 # ============ MODEL ============
@@ -289,26 +287,23 @@ if os.path.exists(checkpoint_path):
     print(f"✅ Resumed from epoch {start_epoch} (Best: {best_acc:.4f})\n")
 
 # ============ TRAINING LOOP ============
-print(f"🚀 STREAM TURBO TRAINING - {EPOCHS} Epochs | Batch {BATCH_SIZE} | Chunk Size {VRAM_CHUNK_SIZE}")
-print("="*70 + "\n")
-
+print(f"🚀 Training for {EPOCHS} epochs (Stream Turbo mode)...\n")
 total_start = time.time()
 
 for epoch in range(start_epoch, EPOCHS):
     epoch_start = time.time()
-    model.train()
     
+    # TRAIN
+    model.train()
     train_loss, correct, total = 0.0, 0, 0
     num_batches_processed = 0
 
-    # Iterate through chunks for training
     for chunk_idx in range(train_streaming_ds.num_chunks):
         current_chunk_x, current_chunk_y = train_streaming_ds._get_chunk(chunk_idx)
         chunk_dataset = TensorDataset(current_chunk_x, current_chunk_y)
         chunk_loader = DataLoader(chunk_dataset, batch_size=BATCH_SIZE, shuffle=True)
 
-        for batch_num, (x, y) in enumerate(chunk_loader):
-            batch_start = time.time()
+        for batch_idx, (x, y) in enumerate(chunk_loader):
             optimizer.zero_grad(set_to_none=True)
             
             with autocast('cuda'):
@@ -318,60 +313,64 @@ for epoch in range(start_epoch, EPOCHS):
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
-            scheduler.step() # Step per batch
+            scheduler.step()
             
-            gpu_time_ms = (time.time() - batch_start) * 1000
-            
+            train_loss += loss.item()
             _, pred = torch.max(outputs, 1)
             total += y.size(0)
             correct += (pred == y).sum().item()
-            train_loss += loss.item()
             num_batches_processed += 1
             
-            # Print per-batch progress
-            if num_batches_processed % 10 == 0: # Update more frequently
-                progress = (num_batches_processed * BATCH_SIZE) / len(train_streaming_ds) * 100
-                print(f"\rEpoch {epoch+1:2d}/{EPOCHS} | Train Chunk {chunk_idx+1}/{train_streaming_ds.num_chunks} | "
-                      f"Batch {batch_num+1}/{len(chunk_loader)} | GPU Time: {gpu_time_ms:.1f}ms | Loss: {loss.item():.4f} | "
-                      f"Acc: {correct/total:.4f} | Prog: {progress:.1f}% | {get_gpu_mem()}", end="", flush=True)
+            if num_batches_processed % 20 == 0:
+                progress = (num_batches_processed * BATCH_SIZE) / len(all_train_paths) * 100
+                elapsed_epoch = time.time() - epoch_start
+                samples_per_sec = (num_batches_processed * BATCH_SIZE) / elapsed_epoch if elapsed_epoch > 0 else 0
+                eta_epoch = (100 - progress) * (elapsed_epoch / progress) if progress > 0 else 0
+                
+                bar_len = 40
+                filled_len = int(bar_len * progress / 100)
+                bar = '█' * filled_len + ' ' * (bar_len - filled_len)
+                
+                mem = get_gpu_mem()
+                print(f"\rEpoch {epoch+1}/{EPOCHS} |{bar}| {progress:5.1f}% | Loss: {loss.item():.4f} | Acc: {correct/total:.4f} | {samples_per_sec:,.0f} samples/s | {mem} | ETA: {format_time(eta_epoch)}", 
+                      end="", flush=True)
 
     train_acc = correct / total
     
-    # Validation
+    # VALIDATION
     model.eval()
     val_correct, val_total = 0, 0
-    val_loss = 0.0
-    val_batches_processed = 0
+    print("\n🔍 Validating...", end="", flush=True)
+    
     with torch.no_grad():
         for chunk_idx in range(val_streaming_ds.num_chunks):
             current_chunk_x, current_chunk_y = val_streaming_ds._get_chunk(chunk_idx)
             chunk_dataset = TensorDataset(current_chunk_x, current_chunk_y)
             chunk_loader = DataLoader(chunk_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
-            for batch_num, (x, y) in enumerate(chunk_loader):
-                batch_start = time.time()
+            for x, y in chunk_loader:
                 with autocast('cuda'):
                     outputs = model(x)
                 
-                loss = criterion(outputs, y)
-                val_loss += loss.item()
-
-                gpu_time_ms = (time.time() - batch_start) * 1000
                 _, pred = torch.max(outputs, 1)
                 val_total += y.size(0)
                 val_correct += (pred == y).sum().item()
-                val_batches_processed += 1
-
-                if val_batches_processed % 10 == 0:
-                    print(f"\rValidation | Chunk {chunk_idx+1}/{val_streaming_ds.num_chunks} | Batch {batch_num+1}/{len(chunk_loader)} | "
-                          f"GPU Time: {gpu_time_ms:.1f}ms | Acc: {val_correct/val_total:.4f} | {get_gpu_mem()}", end="", flush=True)
     
     val_acc = val_correct / val_total
-    epoch_time = time.time() - epoch_start
     
-    print(f"Epoch {epoch+1:2d}/{EPOCHS} | Train Acc: {train_acc:.4f} | Val Acc: {val_acc:.4f} | "
-          f"Avg Train Loss: {train_loss / num_batches_processed:.4f} | Avg Val Loss: {val_loss / len(val_streaming_ds) * BATCH_SIZE:.4f} | " # Approximate val loss
-          f"Time: {epoch_time:.1f}s | {get_gpu_mem()}")
+    # TIMING & SUMMARY
+    epoch_time = time.time() - epoch_start
+    total_elapsed = time.time() - total_start
+    epochs_done = epoch - start_epoch + 1
+    total_eta = (EPOCHS - epoch - 1) * (total_elapsed / epochs_done)
+    current_lr = optimizer.param_groups[0]['lr']
+    mem = get_gpu_mem()
+
+    print(f"\n\n{'='*70}")
+    print(f"📊 Epoch {epoch+1}/{EPOCHS} Complete")
+    print(f"   Train Acc: {train_acc:.4f} | Val Acc: {val_acc:.4f}")
+    print(f"   Epoch Time: {format_time(epoch_time)} | Total: {format_time(total_elapsed)} | ETA: {format_time(total_eta)}")
+    print(f"   LR: {current_lr:.6f} | {mem}")
     
     # === SAVE CHECKPOINT ===
     model_to_save = model.module if isinstance(model, nn.DataParallel) else model
@@ -389,8 +388,10 @@ for epoch in range(start_epoch, EPOCHS):
         best_acc = val_acc
         torch.save(model_to_save.state_dict(), output_model)
         print(f"   ✨ NEW BEST MODEL SAVED! {best_acc:.4f}")
+    else:
+        print()
     
-    print() # Newline for next epoch or completion message
+    print("="*70 + "\n")
 
 print("\n" + "="*70)
 print(f"🎉 STREAM TURBO COMPLETE! Best Acc: {best_acc:.2%}")
