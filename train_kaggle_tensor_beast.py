@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-🚀 KAGGLE TENSOR BEAST
-- Loads pre-packed .pt tensors into System RAM.
-- Zero-latency data loading.
-- Safe VRAM management to avoid OOM.
+🚀 KAGGLE TENSOR BEAST (VERSION 2.0 - USEFUL MODEL)
+- Loads pre-packed SAFE SPLIT tensors (No data leakage).
+- Data Augmentation on GPU (Random rotation, brightness, noise).
+- Weighted Loss to handle empty square imbalance.
 """
 import os
 import sys
@@ -14,6 +14,7 @@ import torch.nn as nn
 import numpy as np
 from torch.utils.data import DataLoader, TensorDataset
 from datetime import timedelta
+from torchvision import transforms
 
 try:
     from torch.amp import GradScaler, autocast
@@ -23,16 +24,26 @@ except ImportError:
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 from chessimg2pos.chessclassifier import UltraEnhancedChessPieceClassifier
 
+import argparse
+
+# ============ ARGUMENT PARSING ============
+parser = argparse.ArgumentParser(description='Kaggle Tensor Beast Training')
+parser.add_argument('--data-dir', type=str, default='tensor_dataset_synthetic', help='Directory containing .pt chunks')
+parser.add_argument('--epochs', type=int, default=50, help='Number of epochs')
+parser.add_argument('--batch-size', type=int, default=4096, help='Batch size')
+parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
+args = parser.parse_args()
+
 # ============ CONFIG ============
 FEN_CHARS = "1RNBQKPrnbqkp"
 USE_GRAYSCALE = True
-EPOCHS = 50
-BATCH_SIZE = 4096 
-LEARNING_RATE = 0.001
+EPOCHS = args.epochs
+BATCH_SIZE = args.batch_size
+LEARNING_RATE = args.lr
 
 # ============ PATHS ============
 base_dir = os.path.dirname(os.path.abspath(__file__))
-tensor_dir = os.path.join(base_dir, "tensor_dataset")
+tensor_dir = os.path.join(base_dir, args.data_dir)
 output_model = os.path.join(base_dir, "models", "model_tensor_beast.pt")
 checkpoint_path = os.path.join(base_dir, "models", "checkpoint_tensor_beast.pt")
 os.makedirs(os.path.join(base_dir, "models"), exist_ok=True)
@@ -55,16 +66,25 @@ def get_gpu_mem():
         return " ".join(mem_info)
     return "N/A"
 
+# ============ AUGMENTATION ============
+# Apply these on the GPU batch for maximum speed
+train_augmentations = nn.Sequential(
+    transforms.RandomRotation(10),
+    transforms.ColorJitter(brightness=0.2, contrast=0.2),
+)
+
+def apply_noise(x, amount=0.02):
+    noise = torch.randn_like(x) * amount
+    return x + noise
+
 # ============ DATA LOADING ============
-def load_full_dataset():
-    print(f"📂 Loading all tensors from {tensor_dir} into System RAM...")
+def load_tensors(pattern):
+    print(f"📂 Loading {pattern} tensors from {tensor_dir}...")
     start = time.time()
-    chunk_files = sorted(glob.glob(os.path.join(tensor_dir, "chunk_*.pt")))
+    files = sorted(glob.glob(os.path.join(tensor_dir, pattern)))
     
-    all_x = []
-    all_y = []
-    
-    for f in chunk_files:
+    all_x, all_y = [], []
+    for f in files:
         data = torch.load(f, map_location='cpu')
         all_x.append(data['x'])
         all_y.append(data['y'])
@@ -72,27 +92,21 @@ def load_full_dataset():
         
     x = torch.cat(all_x, dim=0)
     y = torch.cat(all_y, dim=0).long()
-    
-    elapsed = time.time() - start
-    print(f"✅ Loaded {x.size(0):,} images into RAM in {elapsed:.1f}s")
+    print(f"✅ Loaded {x.size(0):,} images in {time.time()-start:.1f}s")
     return x, y
 
 # ============ MAIN ============
 def main():
     print("="*70)
-    print("🔥 KAGGLE TENSOR BEAST - ZERO LATENCY TRAINING")
+    print("🔥 KAGGLE TENSOR BEAST V2 - ENHANCED FOR REAL-WORLD")
     print("="*70)
 
-    # Load everything into RAM
-    full_x, full_y = load_full_dataset()
+    # Load Train and Val separately (No Leakage!)
+    train_x, train_y = load_tensors("train_chunk_*.pt")
+    val_x, val_y = load_tensors("val_chunk_*.pt")
     
-    # Split
-    indices = torch.randperm(full_x.size(0))
-    split = int(0.9 * full_x.size(0))
-    train_idx, val_idx = indices[:split], indices[split:]
-    
-    train_ds = TensorDataset(full_x[train_idx], full_y[train_idx])
-    val_ds = TensorDataset(full_x[val_idx], full_y[val_idx])
+    train_ds = TensorDataset(train_x, train_y)
+    val_ds = TensorDataset(val_x, val_y)
     
     train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE)
@@ -107,12 +121,17 @@ def main():
         print(f"🚀 DataParallel enabled ({torch.cuda.device_count()} GPUs)")
         model = nn.DataParallel(model)
 
+    # Weighted Loss: Penalize "Empty" (index 0) less, pieces more
+    # This prevents the model from just guessing "Empty" for everything
+    weights = torch.ones(len(FEN_CHARS)).to(device)
+    weights[0] = 0.5 # Give 'Empty' half weight
+    criterion = nn.CrossEntropyLoss(weight=weights)
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer, max_lr=LEARNING_RATE*2,
         steps_per_epoch=len(train_loader), epochs=EPOCHS
     )
-    criterion = nn.CrossEntropyLoss()
     scaler = GradScaler('cuda')
 
     # Resumption logic
@@ -120,17 +139,13 @@ def main():
     if os.path.exists(checkpoint_path):
         print(f"🔄 Loading checkpoint...")
         ckpt = torch.load(checkpoint_path, map_location=device)
-        
-        # Robust prefix handling for DataParallel
         state_dict = ckpt['model_state_dict']
         is_dp = isinstance(model, nn.DataParallel)
         has_prefix = any(k.startswith('module.') for k in state_dict.keys())
-        
         if is_dp and not has_prefix:
             state_dict = {f'module.{k}': v for k, v in state_dict.items()}
         elif not is_dp and has_prefix:
             state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
-            
         model.load_state_dict(state_dict)
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
         scheduler.load_state_dict(ckpt['scheduler_state_dict'])
@@ -139,7 +154,7 @@ def main():
         best_acc = ckpt['best_acc']
         print(f"✅ Resumed from epoch {start_epoch} (Best: {best_acc:.4f})\n")
 
-    print(f"🚀 Training for {EPOCHS} epochs...")
+    print(f"🚀 Training for {EPOCHS} epochs with Data Augmentation...")
     total_start = time.time()
 
     for epoch in range(start_epoch, EPOCHS):
@@ -148,10 +163,17 @@ def main():
         train_loss, correct, total = 0.0, 0, 0
         
         for batch_idx, (x, y) in enumerate(train_loader):
-            # Move to GPU and convert to float32 ONLY for this batch
-            x = x.to(device, non_blocking=True).float() / 255.0 # Simple normalization
-            x = (x - 0.5) / 0.5 # [-1, 1]
+            # 1. To Device & Normalize
+            x = x.to(device, non_blocking=True).float() / 255.0
             y = y.to(device, non_blocking=True)
+            
+            # 2. GPU Augmentation
+            with torch.no_grad():
+                x = train_augmentations(x)
+                x = apply_noise(x)
+            
+            # 3. Standardize to [-1, 1] after augmentation
+            x = (x - 0.5) / 0.5
             
             optimizer.zero_grad(set_to_none=True)
             with autocast('cuda'):
@@ -172,15 +194,14 @@ def main():
                 progress = (batch_idx + 1) / len(train_loader) * 100
                 elapsed = time.time() - epoch_start
                 sps = (batch_idx * BATCH_SIZE) / elapsed if elapsed > 0 else 0
+                eta_batch = (100 - progress) * (elapsed / progress) if progress > 0 else 0
                 
-                bar_len = 30
-                filled = int(bar_len * progress / 100)
-                bar = '█' * filled + ' ' * (bar_len - filled)
-                print(f"\rEpoch {epoch+1}/{EPOCHS} |{bar}| {progress:5.1f}% | Loss: {loss.item():.4f} | {sps:,.0f} samples/s | {get_gpu_mem()}", end="", flush=True)
+                bar = '█' * int(30 * progress / 100) + ' ' * (30 - int(30 * progress / 100))
+                print(f"\rEpoch {epoch+1}/{EPOCHS} |{bar}| {progress:5.1f}% | Loss: {loss.item():.4f} | {sps:,.0f} samples/s | {get_gpu_mem()} | ETA: {format_time(eta_batch)}", end="", flush=True)
 
         train_acc = correct / total
         
-        # Validation
+        # Validation (NO Augmentation)
         model.eval()
         val_correct, val_total = 0, 0
         print("\n🔍 Validating...", end="", flush=True)
@@ -189,7 +210,6 @@ def main():
                 x = x.to(device, non_blocking=True).float() / 255.0
                 x = (x - 0.5) / 0.5
                 y = y.to(device, non_blocking=True)
-                
                 with autocast('cuda'):
                     outputs = model(x)
                 _, pred = torch.max(outputs, 1)
