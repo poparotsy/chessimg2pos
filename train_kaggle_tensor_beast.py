@@ -120,7 +120,18 @@ def main():
     if os.path.exists(checkpoint_path):
         print(f"🔄 Loading checkpoint...")
         ckpt = torch.load(checkpoint_path, map_location=device)
-        model.load_state_dict(ckpt['model_state_dict'])
+        
+        # Robust prefix handling for DataParallel
+        state_dict = ckpt['model_state_dict']
+        is_dp = isinstance(model, nn.DataParallel)
+        has_prefix = any(k.startswith('module.') for k in state_dict.keys())
+        
+        if is_dp and not has_prefix:
+            state_dict = {f'module.{k}': v for k, v in state_dict.items()}
+        elif not is_dp and has_prefix:
+            state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
+            
+        model.load_state_dict(state_dict)
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
         scheduler.load_state_dict(ckpt['scheduler_state_dict'])
         scaler.load_state_dict(ckpt['scaler_state_dict'])
