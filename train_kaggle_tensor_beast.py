@@ -193,7 +193,7 @@ def main():
         print(f"\n\n{'='*70}")
         print(f"📊 Epoch {epoch+1}/{EPOCHS} Complete")
         print(f"   Train Acc: {train_acc:.4f} | Val Acc: {val_acc:.4f}")
-        print(f"   Epoch Time: {format_time(epoch_time)} | Total: {format_time(total_elapsed)} | ETA: {format_time(total_eta)}")
+        print(f"   Epoch Time: {format_time(epoch_time)} | Total: {format_time(total_elapsed)} | ETA: {format_time(eta)}")
         print(f"   LR: {optimizer.param_groups[0]['lr']:.6f} | {get_gpu_mem()}")
         
         # SAVE
