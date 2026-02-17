@@ -108,7 +108,10 @@ def main():
         model = nn.DataParallel(model)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3)
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer, max_lr=LEARNING_RATE*2,
+        steps_per_epoch=len(train_loader), epochs=EPOCHS
+    )
     criterion = nn.CrossEntropyLoss()
     scaler = GradScaler('cuda')
 
@@ -145,8 +148,9 @@ def main():
         train_loss, correct, total = 0.0, 0, 0
         
         for batch_idx, (x, y) in enumerate(train_loader):
-            x = x.to(device, non_blocking=True).float() / 255.0
-            x = (x - 0.5) / 0.5
+            # Move to GPU and convert to float32 ONLY for this batch
+            x = x.to(device, non_blocking=True).float() / 255.0 # Simple normalization
+            x = (x - 0.5) / 0.5 # [-1, 1]
             y = y.to(device, non_blocking=True)
             
             optimizer.zero_grad(set_to_none=True)
@@ -157,6 +161,7 @@ def main():
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
+            scheduler.step()
             
             train_loss += loss.item()
             _, pred = torch.max(outputs, 1)
@@ -167,11 +172,12 @@ def main():
                 progress = (batch_idx + 1) / len(train_loader) * 100
                 elapsed = time.time() - epoch_start
                 sps = (batch_idx * BATCH_SIZE) / elapsed if elapsed > 0 else 0
+                eta_epoch = (100 - progress) * (elapsed / progress) if progress > 0 else 0
                 
                 bar_len = 30
                 filled = int(bar_len * progress / 100)
                 bar = '█' * filled + ' ' * (bar_len - filled)
-                print(f"\rEpoch {epoch+1}/{EPOCHS} |{bar}| {progress:5.1f}% | Loss: {loss.item():.4f} | {sps:,.0f} samples/s | {get_gpu_mem()} | ETA: {format_time((100 - progress) * (elapsed / progress) if progress > 0 else 0)}", end="", flush=True)
+                print(f"\rEpoch {epoch+1}/{EPOCHS} |{bar}| {progress:5.1f}% | Loss: {loss.item():.4f} | {sps:,.0f} samples/s | {get_gpu_mem()} | ETA: {format_time(eta_epoch)}", end="", flush=True)
 
         train_acc = correct / total
         
@@ -192,7 +198,6 @@ def main():
                 val_correct += (pred == y).sum().item()
         
         val_acc = val_correct / val_total
-        scheduler.step(val_acc)
         
         epoch_time = time.time() - epoch_start
         total_elapsed = time.time() - total_start
