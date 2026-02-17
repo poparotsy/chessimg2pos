@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-📦 TENSOR PACKER BEAST
-- Converts 5M+ PNG tiles into 10 optimized .pt tensor files.
-- Uses all CPU cores for parallel processing.
-- Saves as uint8 to minimize disk and RAM usage (5GB total).
+📦 TENSOR PACKER BEAST (SAFE SPLIT VERSION)
+- Groups tiles by BOARD to prevent data leakage.
+- Shuffles boards, not individual tiles.
+- Saves separate Train and Validation chunks.
 """
 import os
 import glob
@@ -13,19 +13,18 @@ import numpy as np
 from PIL import Image
 import concurrent.futures
 from datetime import timedelta
-
 import argparse
 
 # ============ ARGUMENT PARSING ============
-parser = argparse.ArgumentParser(description='Tensor Packer Beast')
+parser = argparse.ArgumentParser(description='Tensor Packer Beast (Safe Split)')
 parser.add_argument('--input-dir', type=str, help='Path to tiles_real directory')
-parser.add_argument('--chunks', type=int, default=10, help='Number of chunks to split into')
+parser.add_argument('--train-chunks', type=int, default=8, help='Number of training chunks')
+parser.add_argument('--val-chunks', type=int, default=2, help='Number of validation chunks')
 args = parser.parse_args()
 
 # ============ CONFIG ============
 FEN_CHARS = "1RNBQKPrnbqkp"
 USE_GRAYSCALE = True
-CHUNKS = args.chunks
 NUM_CPU_WORKERS = os.cpu_count() or 4
 
 # ============ PATHS ============
@@ -34,7 +33,7 @@ tiles_dir = args.input_dir if args.input_dir else os.path.join(base_dir, "images
 if not os.path.exists(tiles_dir) and not args.input_dir:
     tiles_dir = os.path.abspath(os.path.join(base_dir, "..", "images", "tiles_real"))
 
-output_dir = os.path.join(base_dir, "tensor_dataset")
+output_dir = os.path.join(base_dir, "tensor_dataset_safe")
 os.makedirs(output_dir, exist_ok=True)
 
 def format_time(seconds):
@@ -51,13 +50,11 @@ def process_single_image(path):
     except:
         return None
 
-def pack_chunk(chunk_idx, paths):
-    print(f"📦 Processing Chunk {chunk_idx+1}/{CHUNKS} ({len(paths):,} images)...")
+def pack_and_save(chunk_name, paths):
+    print(f"📦 Packing {chunk_name} ({len(paths):,} images)...")
     start = time.time()
     
-    imgs = []
-    lbls = []
-    
+    imgs, lbls = [], []
     with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_CPU_WORKERS) as executor:
         results = list(executor.map(process_single_image, paths))
         
@@ -66,56 +63,62 @@ def pack_chunk(chunk_idx, paths):
             imgs.append(res[0])
             lbls.append(res[1])
             
-    if not imgs:
-        print(f"⚠️ Chunk {chunk_idx+1} is empty!")
-        return
+    if not imgs: return
 
-    # Convert to Tensors
-    x = torch.from_numpy(np.stack(imgs)) # (N, 32, 32) uint8
-    if USE_GRAYSCALE:
-        x = x.unsqueeze(1) # (N, 1, 32, 32)
-    else:
-        x = x.permute(0, 3, 1, 2) # (N, 3, 32, 32)
-        
+    x = torch.from_numpy(np.stack(imgs))
+    if USE_GRAYSCALE: x = x.unsqueeze(1)
+    else: x = x.permute(0, 3, 1, 2)
     y = torch.tensor(lbls, dtype=torch.uint8)
     
-    chunk_path = os.path.join(output_dir, f"chunk_{chunk_idx:02d}.pt")
+    chunk_path = os.path.join(output_dir, f"{chunk_name}.pt")
     torch.save({'x': x, 'y': y}, chunk_path)
-    
-    elapsed = time.time() - start
-    print(f"✅ Saved {chunk_path} | {len(imgs):,} images | {elapsed:.1f}s")
+    print(f"✅ Saved {chunk_path} | {time.time()-start:.1f}s")
 
 def main():
-    print("🚀 TENSOR PACKER BEAST - INITIALIZING")
-    print("="*50)
+    print("🚀 TENSOR PACKER BEAST (SAFE SPLIT) - INITIALIZING")
+    print("="*60)
     
-    print(f"🔍 Scanning {tiles_dir}...")
-    all_paths = []
-    board_dirs = glob.glob(os.path.join(tiles_dir, "*"))
-    for d in board_dirs:
-        if os.path.isdir(d):
-            all_paths.extend(glob.glob(os.path.join(d, "*.png")))
-    
-    total_images = len(all_paths)
-    if total_images == 0:
-        print("❌ No images found!")
+    board_dirs = sorted([d for d in glob.glob(os.path.join(tiles_dir, "*")) if os.path.isdir(d)])
+    if not board_dirs:
+        print(f"❌ No boards found in {tiles_dir}")
         return
         
-    print(f"📊 Found {total_images:,} images. Splitting into {CHUNKS} chunks.")
+    print(f"📊 Found {len(board_dirs):,} board directories.")
+    
+    # Shuffle BOARDS
     np.random.seed(42)
-    np.random.shuffle(all_paths)
+    np.random.shuffle(board_dirs)
     
-    chunk_size = (total_images + CHUNKS - 1) // CHUNKS
+    # Split BOARDS
+    split_idx = int(0.9 * len(board_dirs))
+    train_boards = board_dirs[:split_idx]
+    val_boards = board_dirs[split_idx:]
     
-    start_total = time.time()
-    for i in range(CHUNKS):
-        chunk_paths = all_paths[i*chunk_size : (i+1)*chunk_size]
-        if not chunk_paths: break
-        pack_chunk(i, chunk_paths)
+    print(f"📈 Split: {len(train_boards):,} Train boards, {len(val_boards):,} Val boards.")
+
+    def get_all_tiles(dirs):
+        paths = []
+        for d in dirs: paths.extend(glob.glob(os.path.join(d, "*.png")))
+        return paths
+
+    # Process Validation
+    print("\n🔍 Preparing Validation Set...")
+    val_paths = get_all_tiles(val_boards)
+    v_size = (len(val_paths) + args.val_chunks - 1) // args.val_chunks
+    for i in range(args.val_chunks):
+        p = val_paths[i*v_size : (i+1)*v_size]
+        if p: pack_and_save(f"val_chunk_{i:02d}", p)
+
+    # Process Training
+    print("\n🔍 Preparing Training Set...")
+    train_paths = get_all_tiles(train_boards)
+    t_size = (len(train_paths) + args.train_chunks - 1) // args.train_chunks
+    for i in range(args.train_chunks):
+        p = train_paths[i*t_size : (i+1)*t_size]
+        if p: pack_and_save(f"train_chunk_{i:02d}", p)
         
-    print("="*50)
-    print(f"🎉 PACKING COMPLETE! Total Time: {format_time(time.time() - start_total)}")
-    print(f"📁 Tensors saved in: {output_dir}")
+    print("="*60)
+    print(f"🎉 SAFE PACKING COMPLETE! Output: {output_dir}")
 
 if __name__ == "__main__":
     main()
