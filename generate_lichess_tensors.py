@@ -133,8 +133,7 @@ def process_chunk(name):
 def main():
     print("🚀 LICHESS TENSOR GENERATOR - STARTING")
     print(f"📊 Target: {(CHUNKS_TRAIN + CHUNKS_VAL) * BOARDS_PER_CHUNK:,} boards")
-    print(f"📂 Output: {output_dir}
-")
+    print(f"📂 Output: {output_dir}")
     
     start_total = time.time()
     
@@ -146,8 +145,7 @@ def main():
     for i in range(CHUNKS_TRAIN):
         process_chunk(f"train_chunk_{i:02d}")
         
-    print("
-" + "="*60)
+    print("" + "="*60)
     print(f"🎉 SYNTHETIC DATA READY! Total Time: {format_time(time.time() - start_total)}")
     print(f"📁 Tensors saved in: {output_dir}")
     print("="*60)
