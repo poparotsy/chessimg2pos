@@ -126,8 +126,7 @@ def main():
         scaler.load_state_dict(ckpt['scaler_state_dict'])
         start_epoch = ckpt['epoch'] + 1
         best_acc = ckpt['best_acc']
-        print(f"✅ Resumed from epoch {start_epoch} (Best: {best_acc:.4f})
-")
+        print(f"✅ Resumed from epoch {start_epoch} (Best: {best_acc:.4f})\n")
 
     print(f"🚀 Training for {EPOCHS} epochs...")
     total_start = time.time()
@@ -166,15 +165,14 @@ def main():
                 bar_len = 30
                 filled = int(bar_len * progress / 100)
                 bar = '█' * filled + ' ' * (bar_len - filled)
-                print(f"Epoch {epoch+1}/{EPOCHS} |{bar}| {progress:5.1f}% | Loss: {loss.item():.4f} | {sps:,.0f} samples/s | {get_gpu_mem()}", end="", flush=True)
+                print(f"\rEpoch {epoch+1}/{EPOCHS} |{bar}| {progress:5.1f}% | Loss: {loss.item():.4f} | {sps:,.0f} samples/s | {get_gpu_mem()}", end="", flush=True)
 
         train_acc = correct / total
         
         # Validation
         model.eval()
         val_correct, val_total = 0, 0
-        print("
-🔍 Validating...", end="", flush=True)
+        print("\n🔍 Validating...", end="", flush=True)
         with torch.no_grad():
             for x, y in val_loader:
                 x = x.to(device, non_blocking=True).float() / 255.0
@@ -192,12 +190,10 @@ def main():
         total_elapsed = time.time() - total_start
         eta = (EPOCHS - epoch - 1) * (total_elapsed / (epoch - start_epoch + 1))
 
-        print(f"
-
-{'='*70}")
+        print(f"\n\n{'='*70}")
         print(f"📊 Epoch {epoch+1}/{EPOCHS} Complete")
         print(f"   Train Acc: {train_acc:.4f} | Val Acc: {val_acc:.4f}")
-        print(f"   Epoch Time: {format_time(epoch_time)} | Total: {format_time(total_elapsed)} | ETA: {format_time(eta)}")
+        print(f"   Epoch Time: {format_time(epoch_time)} | Total: {format_time(total_elapsed)} | ETA: {format_time(total_eta)}")
         print(f"   LR: {optimizer.param_groups[0]['lr']:.6f} | {get_gpu_mem()}")
         
         # SAVE
@@ -215,8 +211,7 @@ def main():
             best_acc = val_acc
             torch.save(model_to_save.state_dict(), output_model)
             print(f"   ✨ NEW BEST MODEL SAVED! {best_acc:.4f}")
-        print("="*70 + "
-")
+        print("="*70 + "\n")
 
 if __name__ == "__main__":
     main()
