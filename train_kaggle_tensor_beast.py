@@ -69,13 +69,17 @@ def get_gpu_mem():
 # ============ AUGMENTATION ============
 # Apply these on the GPU batch for maximum speed
 train_augmentations = nn.Sequential(
-    transforms.RandomRotation(10),
-    transforms.ColorJitter(brightness=0.2, contrast=0.2),
+    transforms.RandomAffine(
+        degrees=2,           # Very slight rotation
+        translate=(0.04, 0.04), # Shift pieces slightly (up to roughly 1-1.5 pixels)
+        scale=(0.96, 1.04)   # Slight scaling differences
+    ),
+    transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.0)), # Simulate blurry rescales
 )
 
-def apply_noise(x, amount=0.02):
+def apply_noise(x, amount=0.15): # Heavy noise to simulate JPEG compression blockiness on empty squares
     noise = torch.randn_like(x) * amount
-    return x + noise
+    return torch.clamp(x + noise, -1.0, 1.0) # Ensure we don't go out of normalized bounds
 
 # ============ DATA LOADING ============
 def load_tensors(pattern):
@@ -121,20 +125,14 @@ def main():
         print(f"🚀 DataParallel enabled ({torch.cuda.device_count()} GPUs)")
         model = nn.DataParallel(model)
 
-    # Weighted Loss: Penalize "Empty" (index 0) less, pieces more
-    # This prevents the model from just guessing "Empty" for everything
-    weights = torch.ones(len(FEN_CHARS)).to(device)
-    weights[0] = 0.5 # Give 'Empty' half weight
-    criterion = nn.CrossEntropyLoss(weight=weights)
+    # Standard Loss: We no longer need to penalize 'Empty' since 
+    # our generated positions are real legal chess games now!
+    criterion = nn.CrossEntropyLoss()
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        optimizer, max_lr=LEARNING_RATE*2,
-        steps_per_epoch=len(train_loader), epochs=EPOCHS
-    )
     scaler = GradScaler('cuda')
 
-    # Resumption logic
+    # Resumption logic — load model/optimizer/scaler first, then build scheduler
     start_epoch, best_acc = 0, 0.0
     if os.path.exists(checkpoint_path):
         print(f"🔄 Loading checkpoint...")
@@ -148,11 +146,18 @@ def main():
             state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
         model.load_state_dict(state_dict)
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
-        scheduler.load_state_dict(ckpt['scheduler_state_dict'])
         scaler.load_state_dict(ckpt['scaler_state_dict'])
         start_epoch = ckpt['epoch'] + 1
         best_acc = ckpt['best_acc']
         print(f"✅ Resumed from epoch {start_epoch} (Best: {best_acc:.4f})\n")
+
+    # Build OneCycleLR AFTER knowing start_epoch so total_steps covers only remaining epochs.
+    # OneCycleLR cannot safely be restored from checkpoint when the epoch count changes.
+    remaining_epochs = max(EPOCHS - start_epoch, 1)
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer, max_lr=LEARNING_RATE*2,
+        steps_per_epoch=len(train_loader), epochs=remaining_epochs
+    )
 
     print(f"🚀 Training for {EPOCHS} epochs with Data Augmentation...")
     total_start = time.time()
@@ -163,18 +168,15 @@ def main():
         train_loss, correct, total = 0.0, 0, 0
         
         for batch_idx, (x, y) in enumerate(train_loader):
-            # 1. To Device & Normalize
-            x = x.to(device, non_blocking=True).float() / 255.0
+            # 1. To Device - Data is ALREADY normalized to [-1, 1] by generator via ToTensor+Normalize
+            x = x.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
             
             # 2. GPU Augmentation
             with torch.no_grad():
                 x = train_augmentations(x)
                 x = apply_noise(x)
-            
-            # 3. Standardize to [-1, 1] after augmentation
-            x = (x - 0.5) / 0.5
-            
+                
             optimizer.zero_grad(set_to_none=True)
             with autocast('cuda'):
                 outputs = model(x)
@@ -207,8 +209,7 @@ def main():
         print("\n🔍 Validating...", end="", flush=True)
         with torch.no_grad():
             for x, y in val_loader:
-                x = x.to(device, non_blocking=True).float() / 255.0
-                x = (x - 0.5) / 0.5
+                x = x.to(device, non_blocking=True)
                 y = y.to(device, non_blocking=True)
                 with autocast('cuda'):
                     outputs = model(x)
@@ -233,7 +234,7 @@ def main():
             'epoch': epoch,
             'model_state_dict': model_to_save.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
-            'scheduler_state_dict': scheduler.state_dict(),
+            # Note: scheduler_state_dict not saved — OneCycleLR is reconstructed on resume
             'scaler_state_dict': scaler.state_dict(),
             'best_acc': max(best_acc, val_acc)
         }, checkpoint_path)
