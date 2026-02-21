@@ -1,7 +1,7 @@
 """
-🚀 V3 BEAST TRAINER - PRO VERSION
+🚀 V3 BEAST TRAINER - PRO VERSION (FIXED)
 High-performance training script for Chess Piece Classification.
-Rating: ~9.5/10 (Pylint)
+Fix: Updated attribute name from 'fc' to 'classifier'.
 """
 
 import glob
@@ -30,26 +30,32 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 def fix_model_dimensions(model, sample_input):
     """
     Expert Developer Patch:
-    Automatically fixes the Linear layer if it was designed for 32x32.
+    Automatically fixes the 'classifier' layer if it was designed for 32x32.
     """
     model.eval()
     with torch.no_grad():
         # Trace the shape through the convolutional layers
         feat_x = sample_input
+        # Your model uses conv1, conv2, conv3, conv4
         for layer in [model.conv1, model.conv2, model.conv3, model.conv4]:
             feat_x = layer(feat_x)
 
-        # Flattened size from convolutions
+        # Flattened size from convolutions (e.g., 512 * 4 * 4 = 8192)
         flattened_size = feat_x.view(feat_x.size(0), -1).size(1)
 
-        # If the model's fc layer doesn't match, we replace it
-        if model.fc[0].in_features != flattened_size:
+        # ACCESS ATTRIBUTE 'classifier' (instead of 'fc')
+        if model.classifier[0].in_features != flattened_size:
             print(f"🔧 Auto-Fixing: Adjusting features to {flattened_size}")
-            model.fc = nn.Sequential(
+            # Reconstruct the classifier head to match your original architecture
+            # but with the new input size.
+            model.classifier = nn.Sequential(
                 nn.Linear(flattened_size, 512),
-                nn.ReLU(inplace=True),
-                nn.Dropout(0.3),
-                nn.Linear(512, 13)
+                nn.ReLU(True),
+                nn.Dropout(),
+                nn.Linear(512, 512),
+                nn.ReLU(True),
+                nn.Dropout(),
+                nn.Linear(512, 13) # 13 classes
             ).to(DEVICE)
     return model
 
@@ -82,6 +88,7 @@ def train():
     )
 
     # 2. Initialize and Fix Model
+    # Note: use_grayscale=False is key for the 3-channel V3 data
     model = UltraEnhancedChessPieceClassifier(
         num_classes=13,
         use_grayscale=False
@@ -144,7 +151,8 @@ def train():
                 print(f"   Epoch {epoch+1} | {batch_idx}/{len(loader)} "
                       f"| Loss: {loss.item():.4f} | {sps:.0f} img/s")
 
-        print(f"✅ Epoch {epoch+1} Finished | Avg Loss: {running_loss/len(loader):.4f} "
+        avg_loss = running_loss / len(loader)
+        print(f"✅ Epoch {epoch+1} Finished | Avg Loss: {avg_loss:.4f} "
               f"| Time: {time.time() - epoch_start:.1f}s")
 
         # Save Model
