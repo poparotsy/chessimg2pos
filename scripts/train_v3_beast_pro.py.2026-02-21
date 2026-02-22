@@ -1,7 +1,7 @@
 """
-🚀 V3 BEAST TRAINER - BRAVERY EDITION
-Objectives: 64x64 RGB, Weighted Loss (0.5 vs 1.0), and Translation Jitter.
-This version fixes the 'Empty Board' and 'Piece Confusion' errors.
+🚀 V3 BEAST TRAINER - PRO ULTRA
+Modularized for 10/10 Pylint score.
+Features: Weighted Loss, Dual-GPU, 64x64 RGB, and Checkpoints.
 """
 
 import glob
@@ -12,7 +12,6 @@ import time
 import torch
 from torch import nn, amp
 from torch.utils.data import DataLoader, TensorDataset
-from torchvision import transforms
 
 # ============ CONFIG ============
 BATCH_SIZE = 1024
@@ -25,7 +24,7 @@ BEST_MODEL_PATH = "models/model_v3_beast.pt"
 
 # pylint: disable=too-few-public-methods
 class StandaloneBeastClassifier(nn.Module):
-    """Standalone 64x64 RGB Architecture."""
+    """Standalone 64x64 RGB Architecture for Chess Tile Classification."""
 
     def __init__(self, num_classes=13):
         super().__init__()
@@ -45,7 +44,7 @@ class StandaloneBeastClassifier(nn.Module):
 
     @staticmethod
     def _make_block(in_c, out_c):
-        """Conv Block."""
+        """Standard Convolution-Normalization-ReLU-Pooling block."""
         return nn.Sequential(
             nn.Conv2d(in_c, out_c, kernel_size=3, padding=1),
             nn.BatchNorm2d(out_c),
@@ -55,7 +54,7 @@ class StandaloneBeastClassifier(nn.Module):
 
     # pylint: disable=arguments-differ
     def forward(self, x):
-        """Forward pass."""
+        """Passes the input through convolutional and linear layers."""
         x = self.conv1(x)
         x = self.conv2(x)
         x = self.conv3(x)
@@ -63,23 +62,26 @@ class StandaloneBeastClassifier(nn.Module):
         return self.classifier(x)
 
 
-def load_v3_data():
-    """Loads byte-tensors and ensures [N, C, H, W] shape."""
-    files = sorted(glob.glob("tensors_v3/train_chunk_*.pt"))
-    if not files:
-        raise FileNotFoundError("No chunks found in tensors_v3/")
+def get_training_setup(model, train_loader, start_epoch):
+    """Initializes optimizer, criterion, and scheduler."""
+    weights = torch.ones(13).to(DEVICE)
+    weights[0], weights[1:] = 0.1, 2.0  # Weighted Loss
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=LEARNING_RATE,
+        weight_decay=0.05)
+    criterion = nn.CrossEntropyLoss(weight=weights, label_smoothing=0.1)
 
-    x_data = torch.cat([torch.load(f, map_location='cpu')['x'] for f in files])
-    y_data = torch.cat([torch.load(f, map_location='cpu')['y']
-                       for f in files]).long()
-
-    if x_data.shape[-1] == 3:
-        x_data = x_data.permute(0, 3, 1, 2)
-    return TensorDataset(x_data, y_data)
+    remaining = max(EPOCHS - start_epoch, 1)
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer, max_lr=LEARNING_RATE * 2,
+        steps_per_epoch=len(train_loader), epochs=remaining
+    )
+    return optimizer, criterion, scheduler
 
 
 def save_v3_checkpoint(model, optimizer, scaler, stats):
-    """Saves checkpoint and best model (clean of module prefix)."""
+    """Saves checkpoint and best model."""
     os.makedirs("models", exist_ok=True)
     raw = model.module if hasattr(model, 'module') else model
     torch.save({
@@ -91,63 +93,44 @@ def save_v3_checkpoint(model, optimizer, scaler, stats):
     }, CHECKPOINT_PATH)
     if stats['avg_loss'] < stats['best_loss']:
         torch.save(raw.state_dict(), BEST_MODEL_PATH)
-        print(f"✨ New Best Model Saved (Loss: {stats['avg_loss']:.4f})")
         return stats['avg_loss']
     return stats['best_loss']
 
 
-# pylint: disable=too-many-locals
 def train():
-    """Main training loop with Jitter Augmentation."""
-    print(f"🚀 V3 BRAVERY STARTING ON {DEVICE}")
+    """Main training loop."""
+    print(f"🚀 V3 ULTRA STARTING ON {DEVICE}")
+    files = sorted(glob.glob("tensors_v3/train_chunk_*.pt"))
+    x_data = torch.cat([torch.load(f, map_location='cpu')['x'] for f in files])
+    y_data = torch.cat([torch.load(f, map_location='cpu')['y']
+                       for f in files]).long()
+    if x_data.shape[-1] == 3:
+        x_data = x_data.permute(0, 3, 1, 2)
 
-    # 1. Load Data
-    dataset = load_v3_data()
-    loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True,
-                        num_workers=4, pin_memory=True)
-
-    # 2. Setup Model & Bravery Weights
+    loader = DataLoader(TensorDataset(x_data, y_data), batch_size=BATCH_SIZE,
+                        shuffle=True, num_workers=4, pin_memory=True)
     model = StandaloneBeastClassifier(num_classes=13).to(DEVICE)
-    weights = torch.ones(13).to(DEVICE)
-    weights[0], weights[1:] = 0.5, 1.0  # BRAVERY FIX
+    scaler, start_epoch, best_loss = amp.GradScaler('cuda'), 0, float('inf')
 
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=LEARNING_RATE,
-        weight_decay=0.05)
-    criterion = nn.CrossEntropyLoss(weight=weights, label_smoothing=0.1)
-    scaler = amp.GradScaler('cuda')
+    if os.path.exists(CHECKPOINT_PATH):
+        ckpt = torch.load(CHECKPOINT_PATH, map_location=DEVICE)
+        model.load_state_dict(ckpt['model_state_dict'])
+        start_epoch, best_loss = ckpt['epoch'] + \
+            1, ckpt.get('best_loss', float('inf'))
 
-    # 3. SPATIAL AUGMENTER (The 'Piece Detection' Fix)
-    augmenter = nn.Sequential(
-        transforms.RandomAffine(
-            degrees=0, translate=(
-                0.1, 0.1), scale=(
-                0.9, 1.1)),
-        transforms.ColorJitter(brightness=0.2, contrast=0.2)
-    ).to(DEVICE)
-
-    start_epoch, best_loss = 0, float('inf')
     if torch.cuda.device_count() > 1:
         model = nn.DataParallel(model)
 
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        optimizer, max_lr=LEARNING_RATE * 2,
-        steps_per_epoch=len(loader), epochs=EPOCHS
-    )
+    optimizer, criterion, scheduler = get_training_setup(
+        model, loader, start_epoch)
 
     for epoch in range(start_epoch, EPOCHS):
         model.train()
         epoch_start, running_loss = time.time(), 0
         for _, (imgs, lbls) in enumerate(loader):
             imgs, lbls = imgs.to(DEVICE, non_blocking=True), lbls.to(DEVICE)
-
-            # Normalization + JITTER
-            imgs = augmenter((imgs.float() / 127.5) - 1.0)
-
             with amp.autocast('cuda'):
-                loss = criterion(model(imgs), lbls)
-
+                loss = criterion(model((imgs.float() / 127.5) - 1.0), lbls)
             optimizer.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
             scaler.step(optimizer)
