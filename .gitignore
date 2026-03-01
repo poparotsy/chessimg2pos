@@ -1,6 +1,7 @@
 #dist
 chess2imgpos/
 models/
+models/*
 
 venv
 .mypy_cache
@@ -39,6 +40,7 @@ share/python-wheels/
 *.egg
 MANIFEST
 tensors_v3/
+troubeshoot/
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
