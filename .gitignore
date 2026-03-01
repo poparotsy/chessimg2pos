@@ -1,7 +1,6 @@
 #dist
 chess2imgpos/
-models/
-models/*
+*.pt
 
 venv
 .mypy_cache
